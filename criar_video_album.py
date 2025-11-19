@@ -3,6 +3,12 @@
 """
 Script para criar um vídeo de álbum de fotos com animação dinâmica super caótica!
 
+⚠️  RESOLUÇÃO DO VÍDEO:
+Se você receber erro 0xC00D36B4 ao tentar abrir o vídeo, ajuste a variável ESCALA:
+- ESCALA = 1.0 → Resolução original 6384x1344 (pode não funcionar em todos os players)
+- ESCALA = 0.5 → Resolução reduzida 3192x672 (mais compatível) ✅ RECOMENDADO
+- ESCALA = 0.25 → Resolução menor 1596x336 (máxima compatibilidade)
+
 Características:
 - Todas as fotos da pasta MOSAIC aparecem em um único grid
 - ONDAS SOBREPOSTAS: antes de uma onda terminar, a próxima já começa
@@ -36,19 +42,43 @@ import random
 # Configurações
 PASTA_IMAGENS = "MOSAIC"
 FOTO_MASCARA = "fundo.jpg"  # Imagem usada como máscara semi-transparente
-VIDEO_SAIDA = "album_fotos.mp4"
-LARGURA_VIDEO = 3840  # 4K para caber todas as fotos
-ALTURA_VIDEO = 2160
+VIDEO_SAIDA = "album_fotos.avi"  # AVI com codec universal
+# RESOLUÇÃO DO VÍDEO
+# A resolução 6384x1344 pode causar problemas de compatibilidade (erro 0xC00D36B4)
+# Use ESCALA para reduzir o vídeo para uma resolução mais compatível
+
+ESCALA = 0.5  # 0.5 = metade da resolução, 1.0 = resolução original
+
+LARGURA_VIDEO = int(6384 * ESCALA)  # Com escala 0.5 = 3192 pixels
+ALTURA_VIDEO = int(1344 * ESCALA)   # Com escala 0.5 = 672 pixels
 FPS = 30
-FOTOS_POR_LINHA = 15  # Número de fotos por linha no grid
-FOTOS_POR_COLUNA = 12  # Número de fotos por coluna no grid
-DURACAO_POR_ONDA = 4.0  # Segundos que cada onda leva para aparecer/desaparecer (bem mais lento e suave)
-DELAY_ENTRE_ONDAS = 0.8  # Segundos de delay entre início de cada onda (sobreposição)
+
+print(f"⚙️  Resolução do vídeo configurada: {LARGURA_VIDEO}x{ALTURA_VIDEO}")
+print(f"   (Escala: {ESCALA*100:.0f}% da resolução original 6384x1344)")
+
+# Grid com células QUADRADAS que PREENCHEM COMPLETAMENTE o vídeo
+# Calculado usando divisor comum para não deixar barras brancas
+TAMANHO_CELULA_BASE = 168  # Tamanho base na resolução original
+TAMANHO_CELULA = int(TAMANHO_CELULA_BASE * ESCALA)  # Escala proporcionalmente
+FOTOS_POR_LINHA = LARGURA_VIDEO // TAMANHO_CELULA
+FOTOS_POR_COLUNA = ALTURA_VIDEO // TAMANHO_CELULA
+# Com escala 0.5: 38 colunas x 8 linhas = 304 células (usa TODAS as 178 fotos + duplicações)
+
+DURACAO_POR_ONDA = 1.5  # Segundos que cada onda leva para aparecer/desaparecer (mais rápido)
+DELAY_ENTRE_ONDAS = 0.3  # Segundos de delay entre início de cada onda (sobreposição)
 DURACAO_PAUSA_MEIO = 3  # Segundos mostrando todas as fotos antes de começar a saída
 TRANSPARENCIA_MASCARA = 0.70  # Transparência da máscara aplicada em cada foto (0.0 = invisível, 1.0 = opaca)
 
+# Configurações de destaque e variação de tamanho
+PORCENTAGEM_DESTAQUE = 0.12  # 12% das fotos aparecem em destaque (maiores)
+ESCALA_MINIMA = 0.6  # Fotos normais podem entrar com 60% do tamanho
+ESCALA_MAXIMA = 1.4  # Fotos normais podem entrar com 140% do tamanho
+ESCALA_DESTAQUE_MIN = 2.5  # Fotos em destaque entram com 250% do tamanho
+ESCALA_DESTAQUE_MAX = 4.0  # Fotos em destaque entram com até 400% do tamanho
+
 def carregar_e_redimensionar(caminho_imagem, largura, altura):
-    """Carrega e redimensiona uma imagem mantendo a proporção"""
+    """Carrega e recorta a imagem para preencher completamente a célula QUADRADA (crop centralizado)
+    Para preservar o máximo da imagem, usa células quadradas que cortam menos."""
     try:
         # Tenta abrir a imagem
         img = Image.open(caminho_imagem)
@@ -57,18 +87,30 @@ def carregar_e_redimensionar(caminho_imagem, largura, altura):
         if img.mode != 'RGB':
             img = img.convert('RGB')
         
-        # Redimensiona mantendo a proporção
-        img.thumbnail((largura, altura), Image.Resampling.LANCZOS)
+        # Calcula a proporção necessária para preencher o quadrado
+        proporcao_alvo = largura / altura
+        proporcao_img = img.width / img.height
         
-        # Cria um fundo branco do tamanho desejado
-        nova_img = Image.new('RGB', (largura, altura), (255, 255, 255))
+        if proporcao_img > proporcao_alvo:
+            # Imagem é mais larga - ajusta pela altura e corta as laterais
+            nova_altura = altura
+            nova_largura = int(altura * proporcao_img)
+            img_redimensionada = img.resize((nova_largura, nova_altura), Image.Resampling.LANCZOS)
+            
+            # Corta o excesso do centro
+            x_inicio = (nova_largura - largura) // 2
+            img_cortada = img_redimensionada.crop((x_inicio, 0, x_inicio + largura, altura))
+        else:
+            # Imagem é mais alta - ajusta pela largura e corta topo/fundo
+            nova_largura = largura
+            nova_altura = int(largura / proporcao_img)
+            img_redimensionada = img.resize((nova_largura, nova_altura), Image.Resampling.LANCZOS)
+            
+            # Corta o excesso do centro
+            y_inicio = (nova_altura - altura) // 2
+            img_cortada = img_redimensionada.crop((0, y_inicio, largura, y_inicio + altura))
         
-        # Centraliza a imagem
-        x = (largura - img.width) // 2
-        y = (altura - img.height) // 2
-        nova_img.paste(img, (x, y))
-        
-        return np.array(nova_img)
+        return np.array(img_cortada)
     except Exception as e:
         print(f"Erro ao carregar {caminho_imagem}: {e}")
         # Retorna uma imagem branca em caso de erro
@@ -157,17 +199,39 @@ def rotacionar_imagem(imagem, angulo, centro_x, centro_y):
     
     return imagem_rotacionada, nova_largura, nova_altura
 
-def desenhar_foto_em_posicao(frame, foto, x, y, largura_foto, altura_foto, largura_video, altura_video, angulo=0):
-    """Desenha a foto no frame, com rotação opcional"""
+def desenhar_foto_em_posicao(frame, foto, x, y, largura_foto, altura_foto, largura_video, altura_video, angulo=0, escala=1.0):
+    """Desenha a foto no frame, com rotação e escala opcionais"""
+    # Aplica escala se diferente de 1.0
+    if escala != 1.0:
+        nova_largura_escala = int(largura_foto * escala)
+        nova_altura_escala = int(altura_foto * escala)
+        foto_escalada = cv2.resize(foto, (nova_largura_escala, nova_altura_escala), interpolation=cv2.INTER_LINEAR)
+        
+        # Ajusta posição para manter o centro
+        x_centralizado = x - (nova_largura_escala - largura_foto) // 2
+        y_centralizado = y - (nova_altura_escala - altura_foto) // 2
+        
+        foto_trabalho = foto_escalada
+        largura_trabalho = nova_largura_escala
+        altura_trabalho = nova_altura_escala
+        x_trabalho = x_centralizado
+        y_trabalho = y_centralizado
+    else:
+        foto_trabalho = foto
+        largura_trabalho = largura_foto
+        altura_trabalho = altura_foto
+        x_trabalho = x
+        y_trabalho = y
+    
     if angulo != 0:
-        # Rotaciona a foto
+        # Rotaciona a foto (já escalada se necessário)
         foto_rotacionada, nova_largura, nova_altura = rotacionar_imagem(
-            foto, angulo, largura_foto // 2, altura_foto // 2
+            foto_trabalho, angulo, largura_trabalho // 2, altura_trabalho // 2
         )
         
         # Ajusta a posição para manter o centro
-        x_ajustado = x - (nova_largura - largura_foto) // 2
-        y_ajustado = y - (nova_altura - altura_foto) // 2
+        x_ajustado = x_trabalho - (nova_largura - largura_trabalho) // 2
+        y_ajustado = y_trabalho - (nova_altura - altura_trabalho) // 2
         
         largura_atual = nova_largura
         altura_atual = nova_altura
@@ -175,11 +239,11 @@ def desenhar_foto_em_posicao(frame, foto, x, y, largura_foto, altura_foto, largu
         x_atual = x_ajustado
         y_atual = y_ajustado
     else:
-        foto_atual = foto
-        x_atual = x
-        y_atual = y
-        largura_atual = largura_foto
-        altura_atual = altura_foto
+        foto_atual = foto_trabalho
+        x_atual = x_trabalho
+        y_atual = y_trabalho
+        largura_atual = largura_trabalho
+        altura_atual = altura_trabalho
     
     # Calcula os limites válidos
     x_src_start = max(0, -x_atual)
@@ -228,6 +292,11 @@ def criar_video_album():
     """Cria o vídeo com efeito de álbum de fotos - todas as fotos em um único grid"""
     print("🎬 Iniciando criação do vídeo de álbum de fotos...")
     print("📐 Todas as fotos aparecerão em um único grid!")
+    print(f"\n✅ Grid calculado automaticamente para CÉLULAS QUADRADAS:")
+    print(f"   • Resolução do vídeo: {LARGURA_VIDEO}x{ALTURA_VIDEO}")
+    print(f"   • Tamanho da célula: {TAMANHO_CELULA}x{TAMANHO_CELULA} pixels (1:1 - quadrada)")
+    print(f"   • Grid resultante: {FOTOS_POR_LINHA} colunas x {FOTOS_POR_COLUNA} linhas")
+    print(f"   • Total de posições: {FOTOS_POR_LINHA * FOTOS_POR_COLUNA}")
     
     # ============================================================
     # FASE 1: PREPARAÇÃO - Análise e Processamento das Imagens
@@ -244,17 +313,18 @@ def criar_video_album():
         print("❌ Nenhuma imagem encontrada na pasta MOSAIC!")
         return
     
-    # Calcula dimensões de cada foto no grid
-    margem = 10
-    largura_foto = (LARGURA_VIDEO - (FOTOS_POR_LINHA + 1) * margem) // FOTOS_POR_LINHA
-    altura_foto = (ALTURA_VIDEO - (FOTOS_POR_COLUNA + 1) * margem) // FOTOS_POR_COLUNA
+    # Calcula dimensões de cada foto no grid (CÉLULAS QUADRADAS - sem margens)
+    margem = 0
+    largura_foto = TAMANHO_CELULA  # Células quadradas
+    altura_foto = TAMANHO_CELULA   # Células quadradas
     
     total_posicoes = FOTOS_POR_LINHA * FOTOS_POR_COLUNA
     
     print(f"\n📏 Configuração do Grid:")
     print(f"   • Resolução do vídeo: {LARGURA_VIDEO}x{ALTURA_VIDEO}")
     print(f"   • Grid: {FOTOS_POR_LINHA}x{FOTOS_POR_COLUNA} = {total_posicoes} posições")
-    print(f"   • Tamanho de cada foto: {largura_foto}x{altura_foto} pixels")
+    print(f"   • Tamanho de cada célula: {largura_foto}x{altura_foto} pixels ✅ QUADRADA")
+    print(f"   • Proporção da célula: 1:1 (quadrada - mínimo corte possível)")
     
     # Ajusta a lista de imagens para preencher o grid
     if len(lista_imagens) > total_posicoes:
@@ -282,22 +352,29 @@ def criar_video_album():
         print(f"   • Transparência: {int(TRANSPARENCIA_MASCARA * 100)}%")
         print(f"   • A máscara será dividida em {len(lista_imagens)} regiões")
     
-    # Calcula posições finais de todas as fotos no grid
+    # Calcula posições finais de todas as fotos no grid (sem margens)
     print(f"\n📐 Calculando posições finais no grid...")
     todas_posicoes = []
-    indice = 0
+    
+    # Cria TODAS as posições do grid (38 colunas x 8 linhas = 304)
     for linha in range(FOTOS_POR_COLUNA):
         for coluna in range(FOTOS_POR_LINHA):
-            if indice >= len(lista_imagens):
-                break
-            x = margem + coluna * (largura_foto + margem)
-            y = margem + linha * (altura_foto + margem)
+            x = coluna * largura_foto
+            y = linha * altura_foto
             todas_posicoes.append((x, y))
-            indice += 1
-        if indice >= len(lista_imagens):
-            break
     
-    print(f"   ✅ {len(todas_posicoes)} posições calculadas")
+    print(f"   ✅ {len(todas_posicoes)} posições calculadas (deve ser {FOTOS_POR_LINHA}x{FOTOS_POR_COLUNA} = {FOTOS_POR_LINHA * FOTOS_POR_COLUNA})")
+    
+    # Garante que temos exatamente o número correto de imagens
+    if len(lista_imagens) != len(todas_posicoes):
+        print(f"   ⚠️  ATENÇÃO: {len(lista_imagens)} imagens vs {len(todas_posicoes)} posições!")
+        if len(lista_imagens) < len(todas_posicoes):
+            # Duplica mais imagens se necessário
+            fotos_faltantes = len(todas_posicoes) - len(lista_imagens)
+            fotos_originais = lista_imagens[:178]  # Usa apenas as originais para duplicar
+            for _ in range(fotos_faltantes):
+                lista_imagens.append(random.choice(fotos_originais))
+            print(f"   ✅ Ajustado: {len(lista_imagens)} imagens")
     
     # Processa todas as fotos: carrega + redimensiona + aplica máscara
     print(f"\n🖼️  Processando todas as imagens...")
@@ -348,8 +425,13 @@ def criar_video_album():
     print("="*60)
     
     # Cria uma lista com as informações de cada foto para animação
-    print("\n🎲 Definindo ordem e direções de entrada...")
+    print("\n🎲 Definindo ordem, direções, tamanhos e destaques...")
     info_fotos = []
+    
+    # Define quantas fotos serão destacadas
+    num_destaques = int(len(todas_fotos_com_mascara) * PORCENTAGEM_DESTAQUE)
+    indices_destaque = random.sample(range(len(todas_fotos_com_mascara)), num_destaques)
+    
     for i in range(len(todas_fotos_com_mascara)):
         direcao_entrada = random.randint(0, 7)  # 8 direções possíveis
         x_final, y_final = todas_posicoes[i]
@@ -361,6 +443,15 @@ def criar_video_album():
         # Ângulo de rotação inicial (entre -45 e 45 graus)
         angulo_inicial = random.uniform(-45, 45)
         
+        # Define se esta foto está em destaque
+        em_destaque = i in indices_destaque
+        
+        # Define a escala inicial baseado se está em destaque ou não
+        if em_destaque:
+            escala_inicial = random.uniform(ESCALA_DESTAQUE_MIN, ESCALA_DESTAQUE_MAX)
+        else:
+            escala_inicial = random.uniform(ESCALA_MINIMA, ESCALA_MAXIMA)
+        
         info_fotos.append({
             'indice': i,
             'foto': todas_fotos_com_mascara[i],  # Foto já processada com máscara
@@ -370,11 +461,16 @@ def criar_video_album():
             'y_origem': y_origem,
             'direcao': direcao_entrada,
             'angulo_inicial': angulo_inicial,
+            'em_destaque': em_destaque,
+            'escala_inicial': escala_inicial,
             'nome': Path(lista_imagens[i]).name
         })
     
     # Randomiza a ordem de entrada
     random.shuffle(info_fotos)
+    
+    print(f"   ✅ {len(info_fotos)} fotos configuradas")
+    print(f"   ⭐ {num_destaques} fotos em destaque (aparecerão maiores)")
     
     # Divide as fotos em grupos (ondas) de tamanhos aleatórios
     print("\n🌊 Criando ondas de entrada aleatórias...")
@@ -427,11 +523,23 @@ def criar_video_album():
     print("FASE 3: GERAÇÃO DO VÍDEO")
     print("="*60)
     
-    # Cria o vídeo
+    # Cria o vídeo AVI com codec MJPG (Motion JPEG - mais confiável)
     print("\n🎥 Inicializando gerador de vídeo...")
-    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+    print(f"   📁 Arquivo de saída: {VIDEO_SAIDA}")
+    print(f"   📁 Resolução: {LARGURA_VIDEO}x{ALTURA_VIDEO}")
+    print(f"   🔧 Usando codec: MJPG (Motion JPEG - máxima compatibilidade)")
+    
+    fourcc = cv2.VideoWriter_fourcc(*'MJPG')
     video = cv2.VideoWriter(VIDEO_SAIDA, fourcc, FPS, (LARGURA_VIDEO, ALTURA_VIDEO))
-    print(f"   ✅ Vídeo inicializado: {VIDEO_SAIDA}")
+    
+    if not video.isOpened():
+        print("\n   ❌ ERRO: Não foi possível inicializar o vídeo!")
+        print("   💡 Solução: Reinstale o OpenCV com:")
+        print("      pip uninstall opencv-python")
+        print("      pip install opencv-python")
+        return
+    
+    print(f"   ✅ Vídeo inicializado com sucesso!")
     
     # Frame base branco puro
     frame_base_branco = np.ones((ALTURA_VIDEO, LARGURA_VIDEO, 3), dtype=np.uint8) * 255
@@ -496,27 +604,32 @@ def criar_video_album():
                     # Calcula ângulo atual
                     angulo_atual = info['angulo_inicial'] * (1 - progresso_suave)
                     
+                    # Calcula escala atual (vai da escala_inicial para 1.0)
+                    escala_atual = info['escala_inicial'] + (1.0 - info['escala_inicial']) * progresso_suave
+                    
                     # Aplica fade
                     foto_com_fade = (info['foto'] * progresso + 255 * (1 - progresso)).astype(np.uint8)
                     
-                    # Desenha a foto
+                    # Desenha a foto com escala variável
                     desenhar_foto_em_posicao(
                         frame, foto_com_fade,
                         x_atual, y_atual,
                         largura_foto, altura_foto,
                         LARGURA_VIDEO, ALTURA_VIDEO,
-                        angulo=angulo_atual
+                        angulo=angulo_atual,
+                        escala=escala_atual
                     )
             
             else:
-                # Onda já terminou - desenha estática na posição final
+                # Onda já terminou - desenha estática na posição final (escala 1.0 = tamanho normal)
                 for info in onda_info['onda']:
                     desenhar_foto_em_posicao(
                         frame, info['foto'],
                         info['x_final'], info['y_final'],
                         largura_foto, altura_foto,
                         LARGURA_VIDEO, ALTURA_VIDEO,
-                        angulo=0
+                        angulo=0,
+                        escala=1.0
                     )
         
         # Escreve o frame
@@ -605,16 +718,20 @@ def criar_video_album():
                     # Ângulo reverso: vai de 0 para o angulo_inicial (mesma progressão)
                     angulo_atual = info['angulo_inicial'] * progresso_suave
                     
+                    # Escala reversa: vai de 1.0 para a escala_inicial
+                    escala_atual = 1.0 + (info['escala_inicial'] - 1.0) * progresso_suave
+                    
                     # Fade reverso: vai de opaco para transparente (progressão suave também)
                     foto_com_fade = (info['foto'] * (1 - progresso_suave) + 255 * progresso_suave).astype(np.uint8)
                     
-                    # Desenha a foto
+                    # Desenha a foto com escala variável
                     desenhar_foto_em_posicao(
                         frame, foto_com_fade,
                         x_atual, y_atual,
                         largura_foto, altura_foto,
                         LARGURA_VIDEO, ALTURA_VIDEO,
-                        angulo=angulo_atual
+                        angulo=angulo_atual,
+                        escala=escala_atual
                     )
                     fotos_animando += 1
             
@@ -630,8 +747,27 @@ def criar_video_album():
     
     print(f"  ✅ Animação de saída completa!")
     
-    # Finaliza o vídeo
+    # Finaliza o vídeo corretamente
+    print("\n💾 Finalizando e salvando vídeo...")
+    print("   ⏳ Aguarde, escrevendo arquivo no disco...")
+    
+    # Garante que todos os frames foram escritos
     video.release()
+    cv2.destroyAllWindows()
+    
+    # Aguarda um pouco para garantir que o arquivo foi escrito
+    import time
+    time.sleep(0.5)
+    
+    # Verifica se o arquivo foi criado
+    import os
+    if os.path.exists(VIDEO_SAIDA):
+        tamanho_mb = os.path.getsize(VIDEO_SAIDA) / (1024 * 1024)
+        print(f"   ✅ Vídeo salvo com sucesso!")
+        print(f"   📦 Tamanho do arquivo: {tamanho_mb:.1f} MB")
+    else:
+        print(f"   ❌ ERRO: Arquivo não foi criado!")
+    
     duracao_entrada = total_frames / FPS
     duracao_saida = total_frames_saida / FPS
     duracao_total = duracao_entrada + DURACAO_PAUSA_MEIO + duracao_saida
