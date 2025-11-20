@@ -68,7 +68,7 @@ FPS = 30
 DURACAO_POR_ONDA = 2.8  # Segundos que cada onda leva para aparecer/desaparecer
 DELAY_ENTRE_ONDAS = 0.8  # Segundos de delay entre início de cada onda (sobreposição)
 DURACAO_PAUSA_MEIO = 0  # Sem pausa (vai direto da entrada para saída) - Para 1min total (30s+30s)
-TRANSPARENCIA_MASCARA = 0.70  # Transparência da máscara aplicada em cada foto (0.0 = invisível, 1.0 = opaca)
+TRANSPARENCIA_MASCARA = 0.85  # Transparência da máscara aplicada em cada foto (0.0 = invisível, 1.0 = opaca)
 
 # Configurações de destaque e variação de tamanho (compartilhadas)
 NUM_FOTOS_GIGANTES = 20  # Número mínimo de fotos que aparecem GIGANTES na tela
@@ -78,7 +78,7 @@ ESCALA_GIGANTE_MAX = 10.0  # Fotos gigantes entram com até 1000% do tamanho (EN
 
 PORCENTAGEM_DESTAQUE = 0.12  # 12% das fotos aparecem em destaque (maiores)
 ESCALA_MINIMA = 0.6  # Fotos normais podem entrar com 60% do tamanho
-ESCALA_MAXIMA = 1.4  # Fotos normais podem entrar com 140% do tamanho
+ESCALA_MAXIMA = 1.4  # Fotos normais podem entrar com 160% do tamanho
 ESCALA_DESTAQUE_MIN = 2.5  # Fotos em destaque entram com 250% do tamanho
 ESCALA_DESTAQUE_MAX = 4.0  # Fotos em destaque entram com até 400% do tamanho
 
@@ -440,11 +440,12 @@ def criar_video_album(largura_video, altura_video, nome_saida):
                 lista_imagens.append(random.choice(fotos_originais))
             print(f"   ✅ Ajustado: {len(lista_imagens)} imagens")
     
-    # Processa todas as fotos: carrega + redimensiona + aplica máscara
+    # Processa todas as fotos: carrega + redimensiona + cria 2 versões (original e com máscara)
     print(f"\n🖼️  Processando todas as imagens...")
-    print(f"   (Carregando, redimensionando e aplicando máscara)")
+    print(f"   (Carregando, redimensionando e criando 2 versoes: original e com mascara)")
     
-    todas_fotos_com_mascara = []  # Fotos finais prontas para o vídeo
+    todas_fotos_originais = []  # Fotos originais (sem máscara)
+    todas_fotos_com_mascara = []  # Fotos com máscara aplicada
     
     for i, caminho_imagem in enumerate(lista_imagens):
         nome_foto = Path(caminho_imagem).name
@@ -452,19 +453,21 @@ def criar_video_album(largura_video, altura_video, nome_saida):
         
         print(f"   [{i + 1}/{len(lista_imagens)}] {nome_foto}")
         
-        # Carrega e redimensiona a foto
-        foto = carregar_e_redimensionar(caminho_imagem, largura_foto, altura_foto)
+        # Carrega e redimensiona a foto ORIGINAL
+        foto_original = carregar_e_redimensionar(caminho_imagem, largura_foto, altura_foto)
         
         # Extrai a região específica da máscara para esta posição
         regiao_mascara = extrair_regiao_mascara(mascara_completa, x, y, largura_foto, altura_foto)
         
-        # Aplica a máscara na foto (cria a imagem final)
-        foto_final = aplicar_mascara_na_foto(foto, regiao_mascara, TRANSPARENCIA_MASCARA)
+        # Aplica a máscara na foto (cria a versão com máscara)
+        foto_com_mascara = aplicar_mascara_na_foto(foto_original, regiao_mascara, TRANSPARENCIA_MASCARA)
         
-        todas_fotos_com_mascara.append(foto_final)
+        todas_fotos_originais.append(foto_original)
+        todas_fotos_com_mascara.append(foto_com_mascara)
     
-    print(f"\n   ✅ {len(todas_fotos_com_mascara)} imagens processadas e prontas!")
-    print(f"   • Todas as fotos já têm o efeito do fundo.jpg aplicado")
+    print(f"\n   ✅ {len(todas_fotos_originais)} imagens processadas!")
+    print(f"   • Versao original (sem mascara): para animacao de entrada/saida")
+    print(f"   • Versao com mascara (fundo.jpg aplicado): para estado final")
     
     # Gera imagem de resultado final (preview)
     print(f"\n🖼️  Gerando preview do resultado final...")
@@ -529,7 +532,8 @@ def criar_video_album(largura_video, altura_video, nome_saida):
         
         info_fotos.append({
             'indice': i,
-            'foto': todas_fotos_com_mascara[i],  # Foto já processada com máscara
+            'foto_original': todas_fotos_originais[i],  # Foto ORIGINAL (sem máscara) - usada durante animação
+            'foto_com_mascara': todas_fotos_com_mascara[i],  # Foto COM MÁSCARA - usada na posição final
             'x_final': x_final,
             'y_final': y_final,
             'x_origem': x_origem,
@@ -693,13 +697,25 @@ def criar_video_album(largura_video, altura_video, nome_saida):
                     # Calcula escala atual (vai da escala_inicial para 1.0)
                     escala_atual = info['escala_inicial'] + (1.0 - info['escala_inicial']) * progresso_foto
                     
-                    # Aplica fade
-                    #foto_com_fade = (info['foto'] * progresso + 255 * (1 - progresso)).astype(np.uint8)
-                    foto_com_fade = info['foto'] 
+                    # TRANSIÇÃO DE FOTO: Original → Com Máscara
+                    # Durante o movimento (0 a 80%): usa foto original
+                    # Nos últimos 20%: faz fade de original para com máscara
+                    if progresso_foto < 0.80:
+                        # Ainda se movendo: usa foto ORIGINAL (sem máscara)
+                        foto_atual = info['foto_original']
+                    else:
+                        # Chegando na posição final: FADE de original para com máscara
+                        # progresso_fade vai de 0 (em 80%) até 1 (em 100%)
+                        progresso_fade = (progresso_foto - 0.80) / 0.20
+                        # Mistura as duas versões
+                        foto_atual = (
+                            info['foto_original'] * (1 - progresso_fade) +
+                            info['foto_com_mascara'] * progresso_fade
+                        ).astype(np.uint8)
                     
                     # Desenha a foto com escala variável
                     desenhar_foto_em_posicao(
-                        frame, foto_com_fade,
+                        frame, foto_atual,
                         x_atual, y_atual,
                         largura_foto, altura_foto,
                         largura_video, altura_video,
@@ -708,10 +724,10 @@ def criar_video_album(largura_video, altura_video, nome_saida):
                     )
             
             else:
-                # Onda já terminou - desenha estática na posição final (escala 1.0 = tamanho normal)
+                # Onda já terminou - desenha estática na posição final COM MÁSCARA (escala 1.0 = tamanho normal)
                 for info in onda_info['onda']:
                     desenhar_foto_em_posicao(
-                        frame, info['foto'],
+                        frame, info['foto_com_mascara'],  # Usa versão COM MÁSCARA quando estática
                         info['x_final'], info['y_final'],
                         largura_foto, altura_foto,
                         largura_video, altura_video,
@@ -817,9 +833,26 @@ def criar_video_album(largura_video, altura_video, nome_saida):
                     # Escala reversa: vai de 1.0 para a escala_inicial
                     escala_atual = 1.0 + (info['escala_inicial'] - 1.0) * progresso_foto
                     
+                    # TRANSIÇÃO DE FOTO NA SAÍDA: Com Máscara → Original
+                    # Nos primeiros 20%: faz fade de com máscara para original
+                    # Depois (20% a 100%): usa foto original
+                    if progresso_foto < 0.20:
+                        # Começando a sair: FADE de com máscara para original
+                        # progresso_fade vai de 0 (em 0%) até 1 (em 20%)
+                        progresso_fade = progresso_foto / 0.20
+                        # Mistura as duas versões (inverso da entrada)
+                        foto_atual = (
+                            info['foto_com_mascara'] * (1 - progresso_fade) +
+                            info['foto_original'] * progresso_fade
+                        ).astype(np.uint8)
+                    else:
+                        # Já saindo: usa foto ORIGINAL (sem máscara)
+                        foto_atual = info['foto_original']
+                    
                     # Adiciona à lista de fotos animando com seu progresso
                     fotos_animando_lista.append({
                         'info': info,
+                        'foto': foto_atual,  # Foto com fade aplicado
                         'x': x_atual,
                         'y': y_atual,
                         'angulo': angulo_atual,
@@ -834,9 +867,10 @@ def criar_video_album(largura_video, altura_video, nome_saida):
         # Garante que fotos saindo ficam POR CIMA das estáticas
         
         # 1. CAMADA INFERIOR: Todas as fotos ESTÁTICAS (não saindo ainda)
+        #    Usam versão COM MÁSCARA pois estão na posição final
         for foto_data in fotos_estaticas_lista:
             desenhar_foto_em_posicao(
-                frame, foto_data['info']['foto'],
+                frame, foto_data['info']['foto_com_mascara'],  # COM MÁSCARA quando estática
                 foto_data['x'], foto_data['y'],
                 largura_foto, altura_foto,
                 largura_video, altura_video,
@@ -845,13 +879,14 @@ def criar_video_album(largura_video, altura_video, nome_saida):
             )
         
         # 2. CAMADAS SUPERIORES: Todas as fotos ANIMANDO (saindo)
+        #    Usam versão calculada com FADE (com máscara → original)
         #    Ordenadas por progresso INVERSO para criar profundidade
         #    MAIOR progresso = desenhada POR ÚLTIMO = fica mais POR CIMA
         fotos_animando_lista.sort(key=lambda x: x['progresso'], reverse=False)
         
         for foto_data in fotos_animando_lista:
             desenhar_foto_em_posicao(
-                frame, foto_data['info']['foto'],
+                frame, foto_data['foto'],  # Usa foto com fade já aplicado
                 foto_data['x'], foto_data['y'],
                 largura_foto, altura_foto,
                 largura_video, altura_video,
