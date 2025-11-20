@@ -780,22 +780,24 @@ def criar_video_album():
             
             # else: onda já terminou de sair - não desenha (foto já saiu)
         
-        # DESENHA NA ORDEM CORRETA:
-        # 1. Primeiro as fotos ESTÁTICAS (por baixo)
+        # CAMADAS INVERTIDAS NA SAÍDA:
+        # Garante que fotos saindo ficam POR CIMA das estáticas
+        
+        # 1. CAMADA INFERIOR: Todas as fotos ESTÁTICAS (não saindo ainda)
         for foto_data in fotos_estaticas_lista:
             desenhar_foto_em_posicao(
                 frame, foto_data['info']['foto'],
                 foto_data['x'], foto_data['y'],
                 largura_foto, altura_foto,
                 LARGURA_VIDEO, ALTURA_VIDEO,
-                angulo=foto_data['angulo'],
-                escala=foto_data['escala']
+                angulo=0,
+                escala=1.0
             )
         
-        # 2. Depois as fotos ANIMANDO, ordenadas por progresso (menor progresso primeiro)
-        #    Isso faz com que fotos que começaram a sair mais cedo fiquem por baixo
-        #    e fotos que começaram depois fiquem POR CIMA
-        fotos_animando_lista.sort(key=lambda x: x['progresso'])
+        # 2. CAMADAS SUPERIORES: Todas as fotos ANIMANDO (saindo)
+        #    Ordenadas por progresso INVERSO para criar profundidade
+        #    MAIOR progresso = desenhada POR ÚLTIMO = fica mais POR CIMA
+        fotos_animando_lista.sort(key=lambda x: x['progresso'], reverse=False)
         
         for foto_data in fotos_animando_lista:
             desenhar_foto_em_posicao(
@@ -809,7 +811,10 @@ def criar_video_album():
         
         # Debug a cada 5 segundos
         if frame_atual % 150 == 0 and frame_atual > 0:
-            print(f"       Debug: {fotos_estaticas} estáticas, {fotos_animando} animando, {ondas_ativas} ondas ativas")
+            print(f"       Debug: {fotos_estaticas} estáticas (por baixo), {fotos_animando} animando (POR CIMA), {ondas_ativas} ondas ativas")
+            if fotos_animando > 0:
+                # Mostra as primeiras fotos animando para debug
+                print(f"       Ordem de desenho: estáticas primeiro, depois {len(fotos_animando_lista)} fotos saindo por cima")
         
         # Escreve o frame
         frame_bgr = cv2.cvtColor(frame, cv2.COLOR_RGB2BGR)
