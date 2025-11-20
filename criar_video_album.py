@@ -47,38 +47,30 @@ import glob
 from pathlib import Path
 import math
 import random
+import time
+import sys
 
-# Configurações
+# Configura encoding UTF-8 para o console no Windows
+if sys.platform == 'win32':
+    try:
+        sys.stdout.reconfigure(encoding='utf-8')
+    except:
+        pass  # Se falhar, continuamos sem emojis renderizados corretamente
+
+# Configurações GLOBAIS (usadas por todas as versões do vídeo)
 PASTA_IMAGENS = "MOSAIC"
 FOTO_MASCARA = "fundo.jpg"  # Imagem usada como máscara semi-transparente
-VIDEO_SAIDA = "album_fotos.mp4"  # MP4 com codec compatível
-# RESOLUÇÃO DO VÍDEO
-# A resolução 6384x1344 pode causar problemas de compatibilidade (erro 0xC00D36B4)
-# Use ESCALA para reduzir o vídeo para uma resolução mais compatível
-
-ESCALA = 0.5  # 0.5 = metade da resolução, 1.0 = resolução original
-
-LARGURA_VIDEO = int(6384 * ESCALA)  # Com escala 0.5 = 3192 pixels
-ALTURA_VIDEO = int(1344 * ESCALA)   # Com escala 0.5 = 672 pixels
 FPS = 30
 
-print(f"⚙️  Resolução do vídeo configurada: {LARGURA_VIDEO}x{ALTURA_VIDEO}")
-print(f"   (Escala: {ESCALA*100:.0f}% da resolução original 6384x1344)")
-
-# Grid com células QUADRADAS que PREENCHEM COMPLETAMENTE o vídeo
-# Calculado usando divisor comum para não deixar barras brancas
-TAMANHO_CELULA_BASE = 168  # Tamanho base na resolução original
-TAMANHO_CELULA = int(TAMANHO_CELULA_BASE * ESCALA)  # Escala proporcionalmente
-FOTOS_POR_LINHA = LARGURA_VIDEO // TAMANHO_CELULA
-FOTOS_POR_COLUNA = ALTURA_VIDEO // TAMANHO_CELULA
-# Com escala 0.5: 38 colunas x 8 linhas = 304 células (usa TODAS as 178 fotos + duplicações)
-
-DURACAO_POR_ONDA = 1.5  # Segundos que cada onda leva para aparecer/desaparecer (mais rápido)
-DELAY_ENTRE_ONDAS = 0.3  # Segundos de delay entre início de cada onda (sobreposição)
-DURACAO_PAUSA_MEIO = 3  # Segundos mostrando todas as fotos antes de começar a saída
+# Configurações de animação (compartilhadas)
+# Para atingir 30s com ~35 ondas: tempo_total = (num_ondas - 1) * DELAY + DURACAO
+# 30s = 34 * 0.8 + 2.8 = 27.2 + 2.8 = 30s ✓
+DURACAO_POR_ONDA = 2.8  # Segundos que cada onda leva para aparecer/desaparecer
+DELAY_ENTRE_ONDAS = 0.8  # Segundos de delay entre início de cada onda (sobreposição)
+DURACAO_PAUSA_MEIO = 0  # Sem pausa (vai direto da entrada para saída) - Para 1min total (30s+30s)
 TRANSPARENCIA_MASCARA = 0.70  # Transparência da máscara aplicada em cada foto (0.0 = invisível, 1.0 = opaca)
 
-# Configurações de destaque e variação de tamanho
+# Configurações de destaque e variação de tamanho (compartilhadas)
 NUM_FOTOS_GIGANTES = 20  # Número mínimo de fotos que aparecem GIGANTES na tela
 ESCALA_GIGANTE_MIN = 6.0  # Fotos gigantes entram com 600% do tamanho (BEM GRANDES!)
 ESCALA_GIGANTE_MAX = 10.0  # Fotos gigantes entram com até 1000% do tamanho (ENORMES!)
@@ -89,6 +81,25 @@ ESCALA_MINIMA = 0.6  # Fotos normais podem entrar com 60% do tamanho
 ESCALA_MAXIMA = 1.4  # Fotos normais podem entrar com 140% do tamanho
 ESCALA_DESTAQUE_MIN = 2.5  # Fotos em destaque entram com 250% do tamanho
 ESCALA_DESTAQUE_MAX = 4.0  # Fotos em destaque entram com até 400% do tamanho
+
+# CONFIGURAÇÕES DOS VÍDEOS A GERAR
+# O script irá gerar TODOS os vídeos listados abaixo
+# NOTA: A resolução 6384x1344 causa erro 0xC00D36B4 (incompatível com codec mp4v)
+#       Por isso usamos 3192x672 (50% da original) que funciona perfeitamente
+VIDEOS_PARA_GERAR = [
+    {
+        'nome': 'album_fotos_3192x672.mp4',
+        'largura': 3192,  # 50% de 6384 (resolução compatível)
+        'altura': 672,    # 50% de 1344 (resolução compatível)
+        'descricao': 'Video em alta resolucao (50% da original 6384x1344)'
+    },
+    {
+        'nome': 'album_fotos_1680x1176.mp4',
+        'largura': 1680,
+        'altura': 1176,
+        'descricao': 'Video em resolucao alternativa'
+    }
+]
 
 def carregar_e_redimensionar(caminho_imagem, largura, altura):
     """Carrega e recorta a imagem para preencher completamente a célula QUADRADA (crop centralizado)
@@ -302,15 +313,54 @@ def listar_imagens(pasta):
     imagens = sorted(list(set(imagens)))
     return imagens
 
-def criar_video_album():
-    """Cria o vídeo com efeito de álbum de fotos - todas as fotos em um único grid"""
-    print("🎬 Iniciando criação do vídeo de álbum de fotos...")
-    print("📐 Todas as fotos aparecerão em um único grid!")
-    print(f"\n✅ Grid calculado automaticamente para CÉLULAS QUADRADAS:")
-    print(f"   • Resolução do vídeo: {LARGURA_VIDEO}x{ALTURA_VIDEO}")
-    print(f"   • Tamanho da célula: {TAMANHO_CELULA}x{TAMANHO_CELULA} pixels (1:1 - quadrada)")
-    print(f"   • Grid resultante: {FOTOS_POR_LINHA} colunas x {FOTOS_POR_COLUNA} linhas")
-    print(f"   • Total de posições: {FOTOS_POR_LINHA * FOTOS_POR_COLUNA}")
+def criar_video_album(largura_video, altura_video, nome_saida):
+    """Cria o vídeo com efeito de álbum de fotos - todas as fotos em um único grid
+    
+    Args:
+        largura_video: Largura do vídeo em pixels
+        altura_video: Altura do vídeo em pixels
+        nome_saida: Nome do arquivo de vídeo a ser gerado
+    """
+    
+    # Calcula configurações específicas para esta resolução
+    # Grid com células QUADRADAS que PREENCHEM COMPLETAMENTE o vídeo
+    # TAMANHO_CELULA_BASE reduzido para DOBRAR a quantidade de imagens!
+    # 56px = células menores = mais imagens (aprox. 2x mais que 84px)
+    TAMANHO_CELULA_BASE = 56  # Reduzido de 168 para ter ~2x mais imagens
+    
+    # Calcula o tamanho da célula que melhor se ajusta à resolução atual
+    # Tenta encontrar um divisor comum que resulte em células próximas de 56px
+    melhor_tamanho = None
+    melhor_diferenca = float('inf')
+    
+    for tentativa in range(30, 150):  # Testa tamanhos entre 30 e 150 pixels (células menores)
+        cols = largura_video // tentativa
+        rows = altura_video // tentativa
+        
+        # Verifica se divide perfeitamente (sem barras brancas)
+        if cols * tentativa == largura_video and rows * tentativa == altura_video:
+            diferenca = abs(tentativa - TAMANHO_CELULA_BASE)
+            if diferenca < melhor_diferenca:
+                melhor_tamanho = tentativa
+                melhor_diferenca = diferenca
+    
+    # Se não encontrou divisor perfeito, usa o mais próximo possível
+    if melhor_tamanho is None:
+        melhor_tamanho = largura_video // (largura_video // TAMANHO_CELULA_BASE)
+    
+    TAMANHO_CELULA = melhor_tamanho
+    FOTOS_POR_LINHA = largura_video // TAMANHO_CELULA
+    FOTOS_POR_COLUNA = altura_video // TAMANHO_CELULA
+    
+    print("\n" + "="*70)
+    print(f"GERANDO VIDEO: {nome_saida}")
+    print("="*70)
+    print(f"Resolucao: {largura_video}x{altura_video}")
+    print(f"\nGrid calculado automaticamente para CELULAS QUADRADAS:")
+    print(f"   Resolucao do video: {largura_video}x{altura_video}")
+    print(f"   Tamanho da celula: {TAMANHO_CELULA}x{TAMANHO_CELULA} pixels (1:1 - quadrada)")
+    print(f"   Grid resultante: {FOTOS_POR_LINHA} colunas x {FOTOS_POR_COLUNA} linhas")
+    print(f"   Total de posicoes: {FOTOS_POR_LINHA * FOTOS_POR_COLUNA}")
     
     # ============================================================
     # FASE 1: PREPARAÇÃO - Análise e Processamento das Imagens
@@ -335,7 +385,7 @@ def criar_video_album():
     total_posicoes = FOTOS_POR_LINHA * FOTOS_POR_COLUNA
     
     print(f"\n📏 Configuração do Grid:")
-    print(f"   • Resolução do vídeo: {LARGURA_VIDEO}x{ALTURA_VIDEO}")
+    print(f"   • Resolução do vídeo: {largura_video}x{altura_video}")
     print(f"   • Grid: {FOTOS_POR_LINHA}x{FOTOS_POR_COLUNA} = {total_posicoes} posições")
     print(f"   • Tamanho de cada célula: {largura_foto}x{altura_foto} pixels ✅ QUADRADA")
     print(f"   • Proporção da célula: 1:1 (quadrada - mínimo corte possível)")
@@ -360,7 +410,7 @@ def criar_video_album():
     
     # Carrega a máscara completa
     print(f"\n🎭 Carregando máscara de fundo: {FOTO_MASCARA}")
-    mascara_completa = carregar_mascara(FOTO_MASCARA, LARGURA_VIDEO, ALTURA_VIDEO)
+    mascara_completa = carregar_mascara(FOTO_MASCARA, largura_video, altura_video)
     if mascara_completa is not None:
         print(f"   ✅ Máscara carregada com sucesso")
         print(f"   • Transparência: {int(TRANSPARENCIA_MASCARA * 100)}%")
@@ -418,12 +468,12 @@ def criar_video_album():
     
     # Gera imagem de resultado final (preview)
     print(f"\n🖼️  Gerando preview do resultado final...")
-    frame_final = np.ones((ALTURA_VIDEO, LARGURA_VIDEO, 3), dtype=np.uint8) * 255
+    frame_final = np.ones((altura_video, largura_video, 3), dtype=np.uint8) * 255
     for i, (foto, (x, y)) in enumerate(zip(todas_fotos_com_mascara, todas_posicoes)):
         desenhar_foto_em_posicao(
             frame_final, foto, x, y,
             largura_foto, altura_foto,
-            LARGURA_VIDEO, ALTURA_VIDEO
+            largura_video, altura_video
         )
     print(f"   ✅ Resultado final preparado")
     
@@ -456,7 +506,7 @@ def criar_video_album():
         x_final, y_final = todas_posicoes[i]
         x_origem, y_origem = calcular_posicao_origem(
             x_final, y_final, largura_foto, altura_foto, 
-            LARGURA_VIDEO, ALTURA_VIDEO, direcao_entrada
+            largura_video, altura_video, direcao_entrada
         )
         
         # Ângulo de rotação inicial (entre -45 e 45 graus)
@@ -554,12 +604,12 @@ def criar_video_album():
     
     # Cria o vídeo MP4 com codec mp4v (MPEG-4 Part 2 - compatível)
     print("\n🎥 Inicializando gerador de vídeo...")
-    print(f"   📁 Arquivo de saída: {VIDEO_SAIDA}")
-    print(f"   📁 Resolução: {LARGURA_VIDEO}x{ALTURA_VIDEO}")
+    print(f"   📁 Arquivo de saída: {nome_saida}")
+    print(f"   📁 Resolução: {largura_video}x{altura_video}")
     print(f"   🔧 Usando codec: mp4v (MPEG-4 Part 2 - máxima compatibilidade)")
     
     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-    video = cv2.VideoWriter(VIDEO_SAIDA, fourcc, FPS, (LARGURA_VIDEO, ALTURA_VIDEO))
+    video = cv2.VideoWriter(nome_saida, fourcc, FPS, (largura_video, altura_video))
     
     if not video.isOpened():
         print("\n   ❌ ERRO: Não foi possível inicializar o vídeo!")
@@ -571,7 +621,7 @@ def criar_video_album():
     print(f"   ✅ Vídeo inicializado com sucesso!")
     
     # Frame base branco puro
-    frame_base_branco = np.ones((ALTURA_VIDEO, LARGURA_VIDEO, 3), dtype=np.uint8) * 255
+    frame_base_branco = np.ones((altura_video, largura_video, 3), dtype=np.uint8) * 255
     
     print("\n🎞️  Gerando animação com ondas sobrepostas...")
     
@@ -652,7 +702,7 @@ def criar_video_album():
                         frame, foto_com_fade,
                         x_atual, y_atual,
                         largura_foto, altura_foto,
-                        LARGURA_VIDEO, ALTURA_VIDEO,
+                        largura_video, altura_video,
                         angulo=angulo_atual,
                         escala=escala_atual
                     )
@@ -664,7 +714,7 @@ def criar_video_album():
                         frame, info['foto'],
                         info['x_final'], info['y_final'],
                         largura_foto, altura_foto,
-                        LARGURA_VIDEO, ALTURA_VIDEO,
+                        largura_video, altura_video,
                         angulo=0,
                         escala=1.0
                     )
@@ -789,7 +839,7 @@ def criar_video_album():
                 frame, foto_data['info']['foto'],
                 foto_data['x'], foto_data['y'],
                 largura_foto, altura_foto,
-                LARGURA_VIDEO, ALTURA_VIDEO,
+                largura_video, altura_video,
                 angulo=0,
                 escala=1.0
             )
@@ -804,7 +854,7 @@ def criar_video_album():
                 frame, foto_data['info']['foto'],
                 foto_data['x'], foto_data['y'],
                 largura_foto, altura_foto,
-                LARGURA_VIDEO, ALTURA_VIDEO,
+                largura_video, altura_video,
                 angulo=foto_data['angulo'],
                 escala=foto_data['escala']
             )
@@ -836,8 +886,8 @@ def criar_video_album():
     
     # Verifica se o arquivo foi criado
     import os
-    if os.path.exists(VIDEO_SAIDA):
-        tamanho_mb = os.path.getsize(VIDEO_SAIDA) / (1024 * 1024)
+    if os.path.exists(nome_saida):
+        tamanho_mb = os.path.getsize(nome_saida) / (1024 * 1024)
         print(f"   ✅ Vídeo salvo com sucesso!")
         print(f"   📦 Tamanho do arquivo: {tamanho_mb:.1f} MB")
     else:
@@ -847,12 +897,11 @@ def criar_video_album():
     duracao_saida = total_frames_saida / FPS
     duracao_total = duracao_entrada + DURACAO_PAUSA_MEIO + duracao_saida
     
-    print("\n" + "="*60)
-    print("VÍDEO CONCLUÍDO!")
-    print("="*60)
-    print(f"\n✅ Arquivo gerado: {VIDEO_SAIDA}")
+    print("\n" + "="*70)
+    print(f"✅ VÍDEO CONCLUÍDO: {nome_saida}")
+    print("="*70)
     print(f"\n📊 Estatísticas:")
-    print(f"   • Resolução: {LARGURA_VIDEO}x{ALTURA_VIDEO}")
+    print(f"   • Resolução: {largura_video}x{altura_video}")
     print(f"   • Duração total: {duracao_total:.1f} segundos ({duracao_total/60:.1f} minutos)")
     print(f"   • Duração da entrada: {duracao_entrada:.1f} segundos")
     print(f"   • Duração da pausa: {DURACAO_PAUSA_MEIO} segundos")
@@ -871,5 +920,36 @@ def criar_video_album():
     print("\n" + "="*60)
 
 if __name__ == "__main__":
-    criar_video_album()
+    print("\n" + "="*80)
+    print("GERADOR DE VIDEOS DE ALBUM DE FOTOS")
+    print("="*80)
+    print(f"\nConfiguracao:")
+    print(f"   Total de videos a gerar: {len(VIDEOS_PARA_GERAR)}")
+    for i, config in enumerate(VIDEOS_PARA_GERAR, 1):
+        print(f"   {i}. {config['nome']} - {config['largura']}x{config['altura']} - {config['descricao']}")
+    print("\n" + "="*80)
+    
+    # Gera cada vídeo configurado
+    for i, config in enumerate(VIDEOS_PARA_GERAR, 1):
+        print(f"\n\n{'='*80}")
+        print(f"GERANDO VIDEO {i}/{len(VIDEOS_PARA_GERAR)}")
+        print(f"{'='*80}")
+        
+        criar_video_album(
+            largura_video=config['largura'],
+            altura_video=config['altura'],
+            nome_saida=config['nome']
+        )
+    
+    print("\n\n" + "="*80)
+    print("TODOS OS VIDEOS FORAM GERADOS COM SUCESSO!")
+    print("="*80)
+    print("\nArquivos gerados:")
+    for i, config in enumerate(VIDEOS_PARA_GERAR, 1):
+        if os.path.exists(config['nome']):
+            tamanho_mb = os.path.getsize(config['nome']) / (1024 * 1024)
+            print(f"   {i}. OK: {config['nome']} ({tamanho_mb:.1f} MB)")
+        else:
+            print(f"   {i}. ERRO: {config['nome']} (FALHOU na geracao)")
+    print("\n" + "="*80)
 
