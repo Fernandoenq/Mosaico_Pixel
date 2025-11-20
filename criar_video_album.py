@@ -50,6 +50,9 @@ import random
 import time
 import sys
 
+# Importa módulo de detecção de rosto
+from detectar_rosto import carregar_e_redimensionar_com_deteccao_rosto
+
 # Configura encoding UTF-8 para o console no Windows
 if sys.platform == 'win32':
     try:
@@ -89,14 +92,14 @@ ESCALA_DESTAQUE_MAX = 7.0  # Fotos em destaque entram com até 400% do tamanho
 # CADA VÍDEO USA SUA PRÓPRIA MÁSCARA (já no tamanho correto!)
 VIDEOS_PARA_GERAR = [
     {
-        'nome': 'album_fotos_3192x672.mp4',
+        'nome': 'Mosaico_Pixel_6k.mp4',
         'largura': 3192,  # 50% de 6384 (resolução compatível)
         'altura': 672,    # 50% de 1344 (resolução compatível)
         'descricao': 'Video em alta resolucao (50% da original 6384x1344)',
         'mascara': 'fundoalto.png'  # Máscara específica para alta resolução (3192x672)
     },
     {
-        'nome': 'album_fotos_1680x1176.mp4',
+        'nome': 'Mosaico_Pixel_2k.mp4',
         'largura': 1680,
         'altura': 1176,
         'descricao': 'Video em resolucao alternativa',
@@ -105,44 +108,11 @@ VIDEOS_PARA_GERAR = [
 ]
 
 def carregar_e_redimensionar(caminho_imagem, largura, altura):
-    """Carrega e recorta a imagem para preencher completamente a célula QUADRADA (crop centralizado)
-    Para preservar o máximo da imagem, usa células quadradas que cortam menos."""
-    try:
-        # Tenta abrir a imagem
-        img = Image.open(caminho_imagem)
-        
-        # Converte para RGB se necessário
-        if img.mode != 'RGB':
-            img = img.convert('RGB')
-        
-        # Calcula a proporção necessária para preencher o quadrado
-        proporcao_alvo = largura / altura
-        proporcao_img = img.width / img.height
-        
-        if proporcao_img > proporcao_alvo:
-            # Imagem é mais larga - ajusta pela altura e corta as laterais
-            nova_altura = altura
-            nova_largura = int(altura * proporcao_img)
-            img_redimensionada = img.resize((nova_largura, nova_altura), Image.Resampling.LANCZOS)
-            
-            # Corta o excesso do centro
-            x_inicio = (nova_largura - largura) // 2
-            img_cortada = img_redimensionada.crop((x_inicio, 0, x_inicio + largura, altura))
-        else:
-            # Imagem é mais alta - ajusta pela largura e corta topo/fundo
-            nova_largura = largura
-            nova_altura = int(largura / proporcao_img)
-            img_redimensionada = img.resize((nova_largura, nova_altura), Image.Resampling.LANCZOS)
-            
-            # Corta o excesso do centro
-            y_inicio = (nova_altura - altura) // 2
-            img_cortada = img_redimensionada.crop((0, y_inicio, largura, y_inicio + altura))
-        
-        return np.array(img_cortada)
-    except Exception as e:
-        print(f"Erro ao carregar {caminho_imagem}: {e}")
-        # Retorna uma imagem branca em caso de erro
-        return np.ones((altura, largura, 3), dtype=np.uint8) * 255
+    """Carrega e recorta a imagem para preencher completamente a célula QUADRADA.
+    AGORA COM DETECÇÃO DE ROSTO: centraliza o corte no rosto detectado!
+    Se não detectar rosto, usa corte centralizado normal."""
+    # Usa a função do módulo detectar_rosto que já faz tudo isso
+    return carregar_e_redimensionar_com_deteccao_rosto(caminho_imagem, largura, altura, verbose=True)
 
 def carregar_mascara(caminho_mascara, largura, altura):
     """Carrega a imagem de máscara redimensionada para o tamanho do vídeo"""
