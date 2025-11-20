@@ -20,6 +20,7 @@ Quanto menor a escala, mais compatível será o vídeo! ✅
 - 📐 **Células quadradas (168x168)** - Preenche 100% da tela, sem barras brancas
 - 🎯 **Usa TODAS as 178 fotos originais** + duplicações para preencher o grid
 - 🌊 **Ondas simultâneas**: múltiplas fotos entram ao mesmo tempo (grupos de 1 a 40 fotos)
+- 🔥 **Fotos GIGANTES**: Mínimo 5 fotos aparecem **ENORMES** (6x a 10x maiores!) 🚀
 - ⭐ **Fotos em destaque**: ~12% das fotos aparecem **MAIORES** (2.5x a 4x) antes de ir para seus lugares
 - 📏 **Tamanhos variados**: cada foto entra com tamanho diferente (0.6x a 1.4x) e se ajusta
 - 🎲 **Entrada completamente aleatória**: 
@@ -91,19 +92,20 @@ python criar_video_album.py
 
 3. **Aguarde o processamento** (pode levar vários minutos com 178 fotos)
 
-4. **O vídeo será gerado como `album_fotos.avi`**
+4. **O vídeo será gerado como `album_fotos.mp4`**
 
 ### 🎥 Codec e Formato de Vídeo
 
-O vídeo é gerado em formato **AVI** com codec **MJPG (Motion JPEG)**:
+O vídeo é gerado em formato **MP4** com codec **mp4v (MPEG-4 Part 2)**:
 
 - ✅ **Máxima compatibilidade** - funciona em QUALQUER player
 - ✅ **Sem dependências externas** (nativo no OpenCV)
 - ✅ **Alta qualidade** de vídeo
 - ✅ **Formato universal** - Windows, Mac, Linux, celulares
 - ✅ **Abre nativamente** no Windows Media Player
+- ✅ **Arquivo compacto** e fácil de compartilhar
 
-**Arquivo gerado**: `album_fotos.avi`
+**Arquivo gerado**: `album_fotos.mp4`
 
 **Requisitos**: OpenCV instalado (`opencv-python` via pip).
 
@@ -144,11 +146,20 @@ Você pode editar as seguintes configurações no início do arquivo `criar_vide
 
 #### Efeitos Visuais:
 - `TRANSPARENCIA_MASCARA`: Transparência da máscara aplicada em cada foto (padrão: 0.70 = 70%)
+
+**Fotos GIGANTES** (aparecem ENORMES na tela):
+- `NUM_FOTOS_GIGANTES`: Número mínimo de fotos gigantes (padrão: 5) 🔥
+- `ESCALA_GIGANTE_MIN`: Escala mínima das fotos gigantes (padrão: 6.0 = 600%)
+- `ESCALA_GIGANTE_MAX`: Escala máxima das fotos gigantes (padrão: 10.0 = 1000%)
+
+**Fotos em Destaque** (aparecem grandes):
 - `PORCENTAGEM_DESTAQUE`: % de fotos que aparecem em destaque (padrão: 0.12 = 12%)
-- `ESCALA_MINIMA`: Escala mínima inicial das fotos normais (padrão: 0.6 = 60%)
-- `ESCALA_MAXIMA`: Escala máxima inicial das fotos normais (padrão: 1.4 = 140%)
 - `ESCALA_DESTAQUE_MIN`: Escala mínima das fotos em destaque (padrão: 2.5 = 250%)
 - `ESCALA_DESTAQUE_MAX`: Escala máxima das fotos em destaque (padrão: 4.0 = 400%)
+
+**Fotos Normais**:
+- `ESCALA_MINIMA`: Escala mínima inicial das fotos normais (padrão: 0.6 = 60%)
+- `ESCALA_MAXIMA`: Escala máxima inicial das fotos normais (padrão: 1.4 = 140%)
 
 ### 📁 Estrutura do Projeto
 
@@ -159,7 +170,7 @@ variasfoto_Vi/
 ├── criar_video_album.py       # Script principal
 ├── requirements.txt           # Dependências Python
 ├── instalar_e_executar.bat    # Script para instalação e execução automática
-└── album_fotos.avi           # Vídeo gerado (após executar)
+└── album_fotos.mp4           # Vídeo gerado (após executar)
 ```
 
 ### 🎨 Como funciona
@@ -246,7 +257,7 @@ O script é executado em **3 fases bem definidas**:
    - Ondas se sobrepõem na saída também (delay de 0.8s)
 
 5. **Finaliza:**
-   - Salva o vídeo como `album_fotos.avi`
+   - Salva o vídeo como `album_fotos.mp4`
 
 **Resultado da Fase 3:** Vídeo completo com ida e volta!
 
@@ -311,8 +322,8 @@ FASE 3: GERAÇÃO DO VÍDEO
 ============================================================
 
 🎥 Inicializando gerador de vídeo...
-   📁 Arquivo de saída: album_fotos.avi
-   🔧 Usando codec: XVID (máxima compatibilidade)
+   📁 Arquivo de saída: album_fotos.mp4
+   🔧 Usando codec: mp4v (MPEG-4 Part 2 - máxima compatibilidade)
    ✅ Vídeo inicializado com sucesso!
 
 🎞️  Gerando animação com ondas sobrepostas...
@@ -327,7 +338,9 @@ FASE 3: GERAÇÃO DO VÍDEO
 
   📊 Total de frames de animação de entrada: ~140 (~4.7 segundos)
   ⏱️  Ondas se sobrepõem com delay de 0.3s entre elas
-  ⭐ ~36 fotos em destaque (12% aparecem maiores)
+  🔥 5 fotos GIGANTES (6x a 10x maiores - ENORMES!)
+  ⭐ ~36 fotos em destaque (2.5x a 4x maiores)
+  📷 ~263 fotos normais (0.6x a 1.4x)
 
   🎬 Gerando frames de entrada...
      Frame 0/140 (0.0%)
@@ -344,7 +357,7 @@ FASE 3: GERAÇÃO DO VÍDEO
 VÍDEO CONCLUÍDO!
 ============================================================
 
-✅ Arquivo gerado: album_fotos.avi
+✅ Arquivo gerado: album_fotos.mp4
 
 📊 Estatísticas:
    • Resolução: 6384x1344 (ultra-wide) - 100% PREENCHIDO
@@ -354,38 +367,52 @@ VÍDEO CONCLUÍDO!
    • Duração da saída: ~4.7 segundos
    • Total de fotos: 304 células quadradas (178 originais + 126 duplicadas)
    • Total de ondas: ~15 (varia a cada execução)
-   • Fotos em destaque: ~36 (12% aparecem maiores)
+   • Fotos GIGANTES: 5 (aparecem 6x a 10x maiores) 🔥
+   • Fotos em destaque: ~36 (aparecem 2.5x a 4x maiores) ⭐
+   • Fotos normais: ~263 (0.6x a 1.4x)
    • Duração por onda: 1.5 segundos ⚡
    • Delay entre ondas: 0.3 segundos (sobreposição rápida)
 
 🔄 Estrutura do vídeo:
    1. Entrada das fotos: ~4.7s (ondas sobrepostas rápidas, fotos em tamanhos variados)
    2. Pausa (todas visíveis): 3s
-   3. Saída das fotos: ~4.7s (reverso da entrada, animação fluida)
+   3. Saída das fotos: ~4.7s (reverso da entrada, **fotos que saem ficam POR CIMA**)
 ```
 
-### ⭐ Sistema de Fotos em Destaque
+### ⭐ Sistema de Fotos em Destaque e GIGANTES
 
-O script seleciona aleatoriamente **12% das fotos** para aparecerem **em destaque** (maiores) durante a animação:
+O script usa **3 categorias** de tamanhos diferentes para criar impacto visual:
 
-#### Fotos Normais (88%):
-- Entram com escala variável entre **0.6x a 1.4x** (60% a 140% do tamanho)
-- Gradualmente se ajustam para o tamanho normal (1.0x)
-- Criam dinamismo e variedade visual
+#### 🔥 Fotos GIGANTES (Mínimo 5):
+- Entram com escala **6.0x a 10.0x** (600% a 1000% do tamanho!) 🚀
+- Aparecem **ENORMES** ocupando grande parte da tela
+- **Se movem mais DEVAGAR** (metade da velocidade) criando efeito de "peso" 🐌
+- Criam impacto visual EXTREMO antes de encolher
+- Selecionadas aleatoriamente para máximo efeito surpresa
+- **Exemplo**: Uma foto que entra com 10x ocupa quase a tela inteira e se move lentamente!
 
-#### Fotos em Destaque (12%):
-- Entram com escala **2.5x a 4.0x** (250% a 400% do tamanho) ⭐
-- Aparecem **MUITO maiores** que as outras, chamando atenção
-- Gradualmente diminuem até o tamanho normal
+#### ⭐ Fotos em Destaque (~12%):
+- Entram com escala **2.5x a 4.0x** (250% a 400% do tamanho)
+- Aparecem **MUITO maiores** que as normais
 - Destacam-se no meio das outras fotos
+- Gradualmente diminuem até o tamanho normal
+
+#### 📷 Fotos Normais (~85%):
+- Entram com escala variável entre **0.6x a 1.4x** (60% a 140%)
+- Criam dinamismo e variedade visual
+- Gradualmente se ajustam para o tamanho normal (1.0x)
 
 **Exemplo visual:**
 ```
-Foto Normal (0.8x) →  [pequena] → → → [normal]
-Foto Destaque (3.5x) → [ENORME] → → → [normal]
+Foto Normal (0.8x)   →  [pequena] →→→→ [normal]      (velocidade normal)
+Foto Destaque (3.5x) →  [GRANDE] →→→→ [normal]       (velocidade normal)
+Foto GIGANTE (8x)    →  [ENOOORME!!!] ➔➔ [normal]   (velocidade LENTA - efeito dramático!)
 ```
 
-Isso cria um efeito visual impressionante onde algumas fotos **"explodem" na tela** antes de se acomodarem no grid! 🎆
+Isso cria um efeito visual **ESPETACULAR** onde:
+- Fotos gigantes literalmente **"EXPLODEM" na tela** 🎆
+- Se movem **mais lentamente** criando efeito de "peso" e drama 🐌
+- Destacam-se MUITO mais que as outras por serem maiores E mais lentas! 🔥
 
 ### 🎯 Exemplo de Direções
 
@@ -398,6 +425,25 @@ As fotos podem entrar de 8 direções diferentes:
 - ↗ **Diagonal superior direita**
 - ↙ **Diagonal inferior esquerda**
 - ↘ **Diagonal inferior direita**
+
+### 🎬 Efeito de Camadas na Saída
+
+Durante a **animação de saída**, as fotos que estão saindo aparecem **POR CIMA** das outras, criando um efeito de profundidade:
+
+**Ordem de desenho (de baixo para cima):**
+1. 🟦 **Fotos estáticas** (ainda não começaram a sair) - camada mais baixa
+2. 🟨 **Fotos saindo com menos progresso** - camadas intermediárias  
+3. 🟥 **Fotos saindo com mais progresso** - camada mais alta (por cima de tudo)
+
+**Resultado visual:**
+```
+[Foto estática] ← por baixo
+  [Foto saindo 20%] ← meio
+    [Foto saindo 50%] ← meio-cima
+      [Foto saindo 80%] ← POR CIMA!
+```
+
+Isso cria um efeito **dramático** onde as fotos parecem "descolar" do grid e sair flutuando por cima das outras! 🎆
 
 ### 🌊 Sistema de Ondas Sobrepostas
 

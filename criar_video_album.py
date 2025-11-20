@@ -12,15 +12,24 @@ Se você receber erro 0xC00D36B4 ao tentar abrir o vídeo, ajuste a variável ES
 Características:
 - Todas as fotos da pasta MOSAIC aparecem em um único grid
 - ONDAS SOBREPOSTAS: antes de uma onda terminar, a próxima já começa
-  * Delay de 0.8s entre ondas cria movimento fluido e contínuo
+  * Delay de 0.3s entre ondas cria movimento fluido e contínuo
   * Múltiplas fotos entram ao mesmo tempo (1 a 40 por onda)
+- FOTOS GIGANTES: Mínimo 20 fotos aparecem ENORMES (6x a 10x) e se movem DEVAGAR
+  * Criam impacto visual extremo
+  * Movimento mais lento (easing quadrático) dá sensação de "peso"
+- TAMANHOS VARIADOS: 3 categorias (gigantes, destaque, normais)
+  * 12% em destaque (2.5x a 4x)
+  * Resto varia entre 0.6x e 1.4x
 - Entrada TOTALMENTE ALEATÓRIA: 
   * Grupos variados (às vezes 1 foto sozinha, às vezes 30 juntas)
   * Ordem completamente randomizada
 - DIREÇÕES VARIADAS: cada foto vem de um canto/lado diferente
   (esquerda, direita, cima, baixo, ou diagonais)
 - ROTAÇÃO DINÂMICA: fotos entram tortas (até ±45°) e vão se endireitando
-- ANIMAÇÃO BEM LENTA E SUAVE: movimento com easing quintic ease-out (4.0s por onda)
+- EFEITO DE CAMADAS NA SAÍDA: fotos que saem ficam POR CIMA das outras
+  * Cria profundidade visual
+  * Ordenadas por progresso (mais progresso = mais por cima)
+- SEM FADE: fotos aparecem e desaparecem opacas (sem transparência)
 - MÁSCARA INDIVIDUAL: cada foto recebe sua "fatia" do fundo.jpg
   * A máscara é aplicada em cada foto do mosaico, não no frame todo
   * A máscara já está presente desde que a foto aparece
@@ -42,7 +51,7 @@ import random
 # Configurações
 PASTA_IMAGENS = "MOSAIC"
 FOTO_MASCARA = "fundo.jpg"  # Imagem usada como máscara semi-transparente
-VIDEO_SAIDA = "album_fotos.avi"  # AVI com codec universal
+VIDEO_SAIDA = "album_fotos.mp4"  # MP4 com codec compatível
 # RESOLUÇÃO DO VÍDEO
 # A resolução 6384x1344 pode causar problemas de compatibilidade (erro 0xC00D36B4)
 # Use ESCALA para reduzir o vídeo para uma resolução mais compatível
@@ -70,6 +79,11 @@ DURACAO_PAUSA_MEIO = 3  # Segundos mostrando todas as fotos antes de começar a 
 TRANSPARENCIA_MASCARA = 0.70  # Transparência da máscara aplicada em cada foto (0.0 = invisível, 1.0 = opaca)
 
 # Configurações de destaque e variação de tamanho
+NUM_FOTOS_GIGANTES = 20  # Número mínimo de fotos que aparecem GIGANTES na tela
+ESCALA_GIGANTE_MIN = 6.0  # Fotos gigantes entram com 600% do tamanho (BEM GRANDES!)
+ESCALA_GIGANTE_MAX = 10.0  # Fotos gigantes entram com até 1000% do tamanho (ENORMES!)
+# NOTA: Fotos gigantes se movem MAIS DEVAGAR (easing quadrático vs quintic) criando efeito de "peso"
+
 PORCENTAGEM_DESTAQUE = 0.12  # 12% das fotos aparecem em destaque (maiores)
 ESCALA_MINIMA = 0.6  # Fotos normais podem entrar com 60% do tamanho
 ESCALA_MAXIMA = 1.4  # Fotos normais podem entrar com 140% do tamanho
@@ -428,9 +442,14 @@ def criar_video_album():
     print("\n🎲 Definindo ordem, direções, tamanhos e destaques...")
     info_fotos = []
     
-    # Define quantas fotos serão destacadas
-    num_destaques = int(len(todas_fotos_com_mascara) * PORCENTAGEM_DESTAQUE)
-    indices_destaque = random.sample(range(len(todas_fotos_com_mascara)), num_destaques)
+    # Define quantas fotos serão GIGANTES (mínimo 5)
+    num_gigantes = max(NUM_FOTOS_GIGANTES, int(len(todas_fotos_com_mascara) * 0.02))  # Mínimo 5 ou 2%
+    indices_gigantes = random.sample(range(len(todas_fotos_com_mascara)), num_gigantes)
+    
+    # Define quantas fotos serão destacadas (excluindo as gigantes)
+    indices_disponiveis = [i for i in range(len(todas_fotos_com_mascara)) if i not in indices_gigantes]
+    num_destaques = min(int(len(todas_fotos_com_mascara) * PORCENTAGEM_DESTAQUE), len(indices_disponiveis))
+    indices_destaque = random.sample(indices_disponiveis, num_destaques)
     
     for i in range(len(todas_fotos_com_mascara)):
         direcao_entrada = random.randint(0, 7)  # 8 direções possíveis
@@ -443,14 +462,20 @@ def criar_video_album():
         # Ângulo de rotação inicial (entre -45 e 45 graus)
         angulo_inicial = random.uniform(-45, 45)
         
-        # Define se esta foto está em destaque
+        # Define se esta foto é GIGANTE, destaque ou normal
+        eh_gigante = i in indices_gigantes
         em_destaque = i in indices_destaque
         
-        # Define a escala inicial baseado se está em destaque ou não
-        if em_destaque:
+        # Define a escala inicial baseado na categoria
+        if eh_gigante:
+            escala_inicial = random.uniform(ESCALA_GIGANTE_MIN, ESCALA_GIGANTE_MAX)
+            tipo = 'gigante'
+        elif em_destaque:
             escala_inicial = random.uniform(ESCALA_DESTAQUE_MIN, ESCALA_DESTAQUE_MAX)
+            tipo = 'destaque'
         else:
             escala_inicial = random.uniform(ESCALA_MINIMA, ESCALA_MAXIMA)
+            tipo = 'normal'
         
         info_fotos.append({
             'indice': i,
@@ -461,7 +486,9 @@ def criar_video_album():
             'y_origem': y_origem,
             'direcao': direcao_entrada,
             'angulo_inicial': angulo_inicial,
+            'eh_gigante': eh_gigante,
             'em_destaque': em_destaque,
+            'tipo': tipo,
             'escala_inicial': escala_inicial,
             'nome': Path(lista_imagens[i]).name
         })
@@ -470,7 +497,9 @@ def criar_video_album():
     random.shuffle(info_fotos)
     
     print(f"   ✅ {len(info_fotos)} fotos configuradas")
-    print(f"   ⭐ {num_destaques} fotos em destaque (aparecerão maiores)")
+    print(f"   🔥 {num_gigantes} fotos GIGANTES (6x a 10x maiores - ENORMES!)")
+    print(f"   ⭐ {num_destaques} fotos em destaque (2.5x a 4x maiores)")
+    print(f"   📷 {len(info_fotos) - num_gigantes - num_destaques} fotos normais (0.6x a 1.4x)")
     
     # Divide as fotos em grupos (ondas) de tamanhos aleatórios
     print("\n🌊 Criando ondas de entrada aleatórias...")
@@ -523,13 +552,13 @@ def criar_video_album():
     print("FASE 3: GERAÇÃO DO VÍDEO")
     print("="*60)
     
-    # Cria o vídeo AVI com codec MJPG (Motion JPEG - mais confiável)
+    # Cria o vídeo MP4 com codec mp4v (MPEG-4 Part 2 - compatível)
     print("\n🎥 Inicializando gerador de vídeo...")
     print(f"   📁 Arquivo de saída: {VIDEO_SAIDA}")
     print(f"   📁 Resolução: {LARGURA_VIDEO}x{ALTURA_VIDEO}")
-    print(f"   🔧 Usando codec: MJPG (Motion JPEG - máxima compatibilidade)")
+    print(f"   🔧 Usando codec: mp4v (MPEG-4 Part 2 - máxima compatibilidade)")
     
-    fourcc = cv2.VideoWriter_fourcc(*'MJPG')
+    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
     video = cv2.VideoWriter(VIDEO_SAIDA, fourcc, FPS, (LARGURA_VIDEO, ALTURA_VIDEO))
     
     if not video.isOpened():
@@ -597,18 +626,26 @@ def criar_video_album():
                 
                 # Anima todas as fotos desta onda
                 for info in onda_info['onda']:
+                    # Fotos GIGANTES se movem mais devagar (easing mais suave = movimento mais lento)
+                    if info['eh_gigante']:
+                        # Usa easing quadrático ao invés de quintic (movimento mais lento e pesado)
+                        progresso_foto = 1 - (1 - progresso) ** 2  # Mais lento que fotos normais
+                    else:
+                        progresso_foto = progresso_suave  # Velocidade normal
+                    
                     # Calcula posição atual
-                    x_atual = int(info['x_origem'] + (info['x_final'] - info['x_origem']) * progresso_suave)
-                    y_atual = int(info['y_origem'] + (info['y_final'] - info['y_origem']) * progresso_suave)
+                    x_atual = int(info['x_origem'] + (info['x_final'] - info['x_origem']) * progresso_foto)
+                    y_atual = int(info['y_origem'] + (info['y_final'] - info['y_origem']) * progresso_foto)
                     
                     # Calcula ângulo atual
-                    angulo_atual = info['angulo_inicial'] * (1 - progresso_suave)
+                    angulo_atual = info['angulo_inicial'] * (1 - progresso_foto)
                     
                     # Calcula escala atual (vai da escala_inicial para 1.0)
-                    escala_atual = info['escala_inicial'] + (1.0 - info['escala_inicial']) * progresso_suave
+                    escala_atual = info['escala_inicial'] + (1.0 - info['escala_inicial']) * progresso_foto
                     
                     # Aplica fade
-                    foto_com_fade = (info['foto'] * progresso + 255 * (1 - progresso)).astype(np.uint8)
+                    #foto_com_fade = (info['foto'] * progresso + 255 * (1 - progresso)).astype(np.uint8)
+                    foto_com_fade = info['foto'] 
                     
                     # Desenha a foto com escala variável
                     desenhar_foto_em_posicao(
@@ -686,18 +723,22 @@ def criar_video_album():
         fotos_estaticas = 0
         fotos_animando = 0
         
-        # Processa cada onda e determina seu estado (EXATAMENTE como na entrada, mas invertido)
+        # Coleta fotos estáticas e animando em listas separadas
+        fotos_estaticas_lista = []
+        fotos_animando_lista = []
+        
+        # Processa cada onda e determina seu estado
         for onda_info in ondas_saida_info:
             if frame_atual < onda_info['frame_inicio']:
                 # Onda ainda não começou a sair - foto DEVE estar estática na posição final
                 for info in onda_info['onda']:
-                    desenhar_foto_em_posicao(
-                        frame, info['foto'],
-                        info['x_final'], info['y_final'],
-                        largura_foto, altura_foto,
-                        LARGURA_VIDEO, ALTURA_VIDEO,
-                        angulo=0
-                    )
+                    fotos_estaticas_lista.append({
+                        'info': info,
+                        'x': info['x_final'],
+                        'y': info['y_final'],
+                        'angulo': 0,
+                        'escala': 1.0
+                    })
                     fotos_estaticas += 1
             
             elif frame_atual < onda_info['frame_fim']:
@@ -706,36 +747,65 @@ def criar_video_album():
                 frame_local = frame_atual - onda_info['frame_inicio']
                 progresso = frame_local / frames_por_onda
                 # Para saída, usa ease-in (inverso do ease-out) para movimento mais suave
-                # Isso faz a foto começar devagar e acelerar gradualmente
                 progresso_suave = progresso ** 5  # Ease-in (quintic)
                 
                 # Anima todas as fotos desta onda (movimento reverso)
                 for info in onda_info['onda']:
-                    # Posição reversa: vai da posição final para a origem
-                    x_atual = int(info['x_final'] + (info['x_origem'] - info['x_final']) * progresso_suave)
-                    y_atual = int(info['y_final'] + (info['y_origem'] - info['y_final']) * progresso_suave)
+                    # Fotos GIGANTES se movem mais devagar na saída também
+                    if info['eh_gigante']:
+                        progresso_foto = progresso ** 2  # Mais lento que fotos normais
+                    else:
+                        progresso_foto = progresso_suave  # Velocidade normal
                     
-                    # Ângulo reverso: vai de 0 para o angulo_inicial (mesma progressão)
-                    angulo_atual = info['angulo_inicial'] * progresso_suave
+                    # Posição reversa: vai da posição final para a origem
+                    x_atual = int(info['x_final'] + (info['x_origem'] - info['x_final']) * progresso_foto)
+                    y_atual = int(info['y_final'] + (info['y_origem'] - info['y_final']) * progresso_foto)
+                    
+                    # Ângulo reverso: vai de 0 para o angulo_inicial
+                    angulo_atual = info['angulo_inicial'] * progresso_foto
                     
                     # Escala reversa: vai de 1.0 para a escala_inicial
-                    escala_atual = 1.0 + (info['escala_inicial'] - 1.0) * progresso_suave
+                    escala_atual = 1.0 + (info['escala_inicial'] - 1.0) * progresso_foto
                     
-                    # Fade reverso: vai de opaco para transparente (progressão suave também)
-                    foto_com_fade = (info['foto'] * (1 - progresso_suave) + 255 * progresso_suave).astype(np.uint8)
-                    
-                    # Desenha a foto com escala variável
-                    desenhar_foto_em_posicao(
-                        frame, foto_com_fade,
-                        x_atual, y_atual,
-                        largura_foto, altura_foto,
-                        LARGURA_VIDEO, ALTURA_VIDEO,
-                        angulo=angulo_atual,
-                        escala=escala_atual
-                    )
+                    # Adiciona à lista de fotos animando com seu progresso
+                    fotos_animando_lista.append({
+                        'info': info,
+                        'x': x_atual,
+                        'y': y_atual,
+                        'angulo': angulo_atual,
+                        'escala': escala_atual,
+                        'progresso': progresso_foto  # Para ordenar depois
+                    })
                     fotos_animando += 1
             
             # else: onda já terminou de sair - não desenha (foto já saiu)
+        
+        # DESENHA NA ORDEM CORRETA:
+        # 1. Primeiro as fotos ESTÁTICAS (por baixo)
+        for foto_data in fotos_estaticas_lista:
+            desenhar_foto_em_posicao(
+                frame, foto_data['info']['foto'],
+                foto_data['x'], foto_data['y'],
+                largura_foto, altura_foto,
+                LARGURA_VIDEO, ALTURA_VIDEO,
+                angulo=foto_data['angulo'],
+                escala=foto_data['escala']
+            )
+        
+        # 2. Depois as fotos ANIMANDO, ordenadas por progresso (menor progresso primeiro)
+        #    Isso faz com que fotos que começaram a sair mais cedo fiquem por baixo
+        #    e fotos que começaram depois fiquem POR CIMA
+        fotos_animando_lista.sort(key=lambda x: x['progresso'])
+        
+        for foto_data in fotos_animando_lista:
+            desenhar_foto_em_posicao(
+                frame, foto_data['info']['foto'],
+                foto_data['x'], foto_data['y'],
+                largura_foto, altura_foto,
+                LARGURA_VIDEO, ALTURA_VIDEO,
+                angulo=foto_data['angulo'],
+                escala=foto_data['escala']
+            )
         
         # Debug a cada 5 segundos
         if frame_atual % 150 == 0 and frame_atual > 0:

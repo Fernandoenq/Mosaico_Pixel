@@ -54,8 +54,8 @@ def main():
     print("CONVERSOR DE VÍDEO - Máxima Compatibilidade")
     print("="*60)
     
-    arquivo_entrada = "album_fotos.avi"
-    arquivo_saida = "album_fotos_compativel.mp4"
+    arquivo_entrada = "album_fotos.mp4"
+    arquivo_saida = "album_fotos_h264.mp4"
     
     # Verifica se o arquivo de entrada existe
     if not os.path.exists(arquivo_entrada):
