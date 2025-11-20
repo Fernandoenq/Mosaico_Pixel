@@ -59,7 +59,7 @@ if sys.platform == 'win32':
 
 # Configurações GLOBAIS (usadas por todas as versões do vídeo)
 PASTA_IMAGENS = "MOSAIC"
-FOTO_MASCARA = "fundo.jpg"  # Imagem usada como máscara semi-transparente
+# FOTO_MASCARA agora é definida individualmente para cada vídeo (ver VIDEOS_PARA_GERAR)
 FPS = 30
 
 # Configurações de animação (compartilhadas)
@@ -71,33 +71,36 @@ DURACAO_PAUSA_MEIO = 0  # Sem pausa (vai direto da entrada para saída) - Para 1
 TRANSPARENCIA_MASCARA = 0.85  # Transparência da máscara aplicada em cada foto (0.0 = invisível, 1.0 = opaca)
 
 # Configurações de destaque e variação de tamanho (compartilhadas)
-NUM_FOTOS_GIGANTES = 20  # Número mínimo de fotos que aparecem GIGANTES na tela
+NUM_FOTOS_GIGANTES = 100  # Número mínimo de fotos que aparecem GIGANTES na tela
 ESCALA_GIGANTE_MIN = 6.0  # Fotos gigantes entram com 600% do tamanho (BEM GRANDES!)
 ESCALA_GIGANTE_MAX = 10.0  # Fotos gigantes entram com até 1000% do tamanho (ENORMES!)
 # NOTA: Fotos gigantes se movem MAIS DEVAGAR (easing quadrático vs quintic) criando efeito de "peso"
 
-PORCENTAGEM_DESTAQUE = 0.12  # 12% das fotos aparecem em destaque (maiores)
-ESCALA_MINIMA = 0.6  # Fotos normais podem entrar com 60% do tamanho
-ESCALA_MAXIMA = 1.4  # Fotos normais podem entrar com 160% do tamanho
-ESCALA_DESTAQUE_MIN = 2.5  # Fotos em destaque entram com 250% do tamanho
-ESCALA_DESTAQUE_MAX = 4.0  # Fotos em destaque entram com até 400% do tamanho
+PORCENTAGEM_DESTAQUE = 0.5  # 12% das fotos aparecem em destaque (maiores)
+ESCALA_MINIMA = 5.6  # Fotos normais podem entrar com 60% do tamanho
+ESCALA_MAXIMA = 6.0  # Fotos normais podem entrar com 160% do tamanho
+ESCALA_DESTAQUE_MIN = 6.5  # Fotos em destaque entram com 250% do tamanho
+ESCALA_DESTAQUE_MAX = 7.0  # Fotos em destaque entram com até 400% do tamanho
 
 # CONFIGURAÇÕES DOS VÍDEOS A GERAR
 # O script irá gerar TODOS os vídeos listados abaixo
 # NOTA: A resolução 6384x1344 causa erro 0xC00D36B4 (incompatível com codec mp4v)
 #       Por isso usamos 3192x672 (50% da original) que funciona perfeitamente
+# CADA VÍDEO USA SUA PRÓPRIA MÁSCARA (já no tamanho correto!)
 VIDEOS_PARA_GERAR = [
     {
         'nome': 'album_fotos_3192x672.mp4',
         'largura': 3192,  # 50% de 6384 (resolução compatível)
         'altura': 672,    # 50% de 1344 (resolução compatível)
-        'descricao': 'Video em alta resolucao (50% da original 6384x1344)'
+        'descricao': 'Video em alta resolucao (50% da original 6384x1344)',
+        'mascara': 'fundoalto.png'  # Máscara específica para alta resolução (3192x672)
     },
     {
         'nome': 'album_fotos_1680x1176.mp4',
         'largura': 1680,
         'altura': 1176,
-        'descricao': 'Video em resolucao alternativa'
+        'descricao': 'Video em resolucao alternativa',
+        'mascara': 'fundobaixo.png'  # Máscara específica para resolução alternativa (1680x1176)
     }
 ]
 
@@ -313,13 +316,14 @@ def listar_imagens(pasta):
     imagens = sorted(list(set(imagens)))
     return imagens
 
-def criar_video_album(largura_video, altura_video, nome_saida):
+def criar_video_album(largura_video, altura_video, nome_saida, caminho_mascara):
     """Cria o vídeo com efeito de álbum de fotos - todas as fotos em um único grid
     
     Args:
         largura_video: Largura do vídeo em pixels
         altura_video: Altura do vídeo em pixels
         nome_saida: Nome do arquivo de vídeo a ser gerado
+        caminho_mascara: Caminho para o arquivo de máscara (fundo) específico desta resolução
     """
     
     # Calcula configurações específicas para esta resolução
@@ -408,9 +412,10 @@ def criar_video_album(largura_video, altura_video, nome_saida):
         
         print(f"   ✅ Grid completo com {len(lista_imagens)} fotos (incluindo {fotos_faltantes} duplicadas)")
     
-    # Carrega a máscara completa
-    print(f"\n🎭 Carregando máscara de fundo: {FOTO_MASCARA}")
-    mascara_completa = carregar_mascara(FOTO_MASCARA, largura_video, altura_video)
+    # Carrega a máscara completa (já no tamanho correto para esta resolução!)
+    print(f"\n🎭 Carregando máscara de fundo: {caminho_mascara}")
+    print(f"   • Resolução esperada: {largura_video}x{altura_video}")
+    mascara_completa = carregar_mascara(caminho_mascara, largura_video, altura_video)
     if mascara_completa is not None:
         print(f"   ✅ Máscara carregada com sucesso")
         print(f"   • Transparência: {int(TRANSPARENCIA_MASCARA * 100)}%")
@@ -947,7 +952,7 @@ def criar_video_album(largura_video, altura_video, nome_saida):
     print(f"   • Duração por onda: {DURACAO_POR_ONDA} segundos")
     print(f"   • Delay entre ondas: {DELAY_ENTRE_ONDAS} segundos (sobreposição)")
     print(f"   • Total de frames: {total_frames + int(FPS * DURACAO_PAUSA_MEIO) + total_frames_saida}")
-    print(f"\n🎭 Máscara aplicada: {FOTO_MASCARA} ({int(TRANSPARENCIA_MASCARA * 100)}%)")
+    print(f"\n🎭 Máscara aplicada: {caminho_mascara} ({int(TRANSPARENCIA_MASCARA * 100)}%)")
     print(f"\n🔄 Estrutura do vídeo:")
     print(f"   1. Entrada das fotos: {duracao_entrada:.1f}s")
     print(f"   2. Pausa (todas visíveis): {DURACAO_PAUSA_MEIO}s")
@@ -973,7 +978,8 @@ if __name__ == "__main__":
         criar_video_album(
             largura_video=config['largura'],
             altura_video=config['altura'],
-            nome_saida=config['nome']
+            nome_saida=config['nome'],
+            caminho_mascara=config['mascara']
         )
     
     print("\n\n" + "="*80)
