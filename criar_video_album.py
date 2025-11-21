@@ -75,8 +75,14 @@ TRANSPARENCIA_MASCARA = 0.85  # Transparência da máscara aplicada em cada foto
 
 # Configurações de destaque e variação de tamanho (compartilhadas)
 NUM_FOTOS_GIGANTES = 100  # Número mínimo de fotos que aparecem GIGANTES na tela
-ESCALA_GIGANTE_MIN = 6.0  # Fotos gigantes entram com 600% do tamanho (BEM GRANDES!)
-ESCALA_GIGANTE_MAX = 10.0  # Fotos gigantes entram com até 1000% do tamanho (ENORMES!)
+
+# FOTOS GIGANTES - Efeito especial de entrada
+ESCALA_GIGANTE_SUPER_MIN = 15.0  # Escala SUPER inicial - começam MUITO maiores (invisíveis/transparentes)
+ESCALA_GIGANTE_SUPER_MAX = 20.0  # Escala SUPER inicial máxima
+ESCALA_GIGANTE_MIN = 6.0  # Tamanho gigante FINAL - quando ficam totalmente opacas (600%)
+ESCALA_GIGANTE_MAX = 10.0  # Tamanho gigante FINAL máximo (1000%)
+# EFEITO: Começam 15x-20x maiores e INVISÍVEIS → vão diminuindo e ficando OPACAS → 
+#         quando atingem 6x-10x já estão 100% visíveis → continuam até 1x (tamanho normal)
 # NOTA: Fotos gigantes se movem MAIS DEVAGAR (easing quadrático vs quintic) criando efeito de "peso"
 
 PORCENTAGEM_DESTAQUE = 0.5  # 12% das fotos aparecem em destaque (maiores)
@@ -496,13 +502,18 @@ def criar_video_album(largura_video, altura_video, nome_saida, caminho_mascara):
         
         # Define a escala inicial baseado na categoria
         if eh_gigante:
-            escala_inicial = random.uniform(ESCALA_GIGANTE_MIN, ESCALA_GIGANTE_MAX)
+            # Fotos GIGANTES: começam SUPER grandes (15-20x) e INVISÍVEIS
+            escala_super_inicial = random.uniform(ESCALA_GIGANTE_SUPER_MIN, ESCALA_GIGANTE_SUPER_MAX)
+            escala_final_gigante = random.uniform(ESCALA_GIGANTE_MIN, ESCALA_GIGANTE_MAX)  # Tamanho quando ficam opacas (6-10x)
+            escala_inicial = escala_super_inicial  # Usa a super escala como ponto de partida
             tipo = 'gigante'
         elif em_destaque:
             escala_inicial = random.uniform(ESCALA_DESTAQUE_MIN, ESCALA_DESTAQUE_MAX)
+            escala_final_gigante = 1.0  # Não é gigante
             tipo = 'destaque'
         else:
             escala_inicial = random.uniform(ESCALA_MINIMA, ESCALA_MAXIMA)
+            escala_final_gigante = 1.0  # Não é gigante
             tipo = 'normal'
         
         info_fotos.append({
@@ -519,6 +530,7 @@ def criar_video_album(largura_video, altura_video, nome_saida, caminho_mascara):
             'em_destaque': em_destaque,
             'tipo': tipo,
             'escala_inicial': escala_inicial,
+            'escala_final_gigante': escala_final_gigante,  # Tamanho onde fica 100% opaca
             'nome': Path(lista_imagens[i]).name
         })
     
@@ -672,6 +684,25 @@ def criar_video_album(largura_video, altura_video, nome_saida, caminho_mascara):
                     # Calcula escala atual (vai da escala_inicial para 1.0)
                     escala_atual = info['escala_inicial'] + (1.0 - info['escala_inicial']) * progresso_foto
                     
+                    # FADE DE OPACIDADE PARA FOTOS GIGANTES
+                    # Começam INVISÍVEIS quando muito grandes, vão ficando VISÍVEIS conforme diminuem
+                    if info['eh_gigante']:
+                        escala_final_gigante = info['escala_final_gigante']
+                        
+                        # Calcula opacidade baseada no tamanho atual
+                        if escala_atual > escala_final_gigante:
+                            # Ainda está maior que o tamanho "gigante" - em processo de fade in
+                            # progresso_fade_opacidade: 0 = invisível, 1 = totalmente visível
+                            progresso_fade_opacidade = 1 - ((escala_atual - escala_final_gigante) / 
+                                                            (info['escala_inicial'] - escala_final_gigante))
+                            progresso_fade_opacidade = max(0, min(1, progresso_fade_opacidade))
+                        else:
+                            # Já atingiu o tamanho gigante final - totalmente visível
+                            progresso_fade_opacidade = 1.0
+                    else:
+                        # Fotos normais e destaque: sempre visíveis (sem fade)
+                        progresso_fade_opacidade = 1.0
+                    
                     # TRANSIÇÃO DE FOTO: Original → Com Máscara
                     # Durante o movimento (0 a 80%): usa foto original
                     # Nos últimos 20%: faz fade de original para com máscara
@@ -686,6 +717,15 @@ def criar_video_album(largura_video, altura_video, nome_saida, caminho_mascara):
                         foto_atual = (
                             info['foto_original'] * (1 - progresso_fade) +
                             info['foto_com_mascara'] * progresso_fade
+                        ).astype(np.uint8)
+                    
+                    # APLICA FADE DE OPACIDADE (para fotos gigantes que começam invisíveis)
+                    if progresso_fade_opacidade < 1.0:
+                        # Mistura com fundo branco para criar efeito de transparência/invisibilidade
+                        fundo_branco = np.ones_like(foto_atual) * 255
+                        foto_atual = (
+                            foto_atual * progresso_fade_opacidade +
+                            fundo_branco * (1 - progresso_fade_opacidade)
                         ).astype(np.uint8)
                     
                     # Desenha a foto com escala variável
@@ -808,6 +848,25 @@ def criar_video_album(largura_video, altura_video, nome_saida, caminho_mascara):
                     # Escala reversa: vai de 1.0 para a escala_inicial
                     escala_atual = 1.0 + (info['escala_inicial'] - 1.0) * progresso_foto
                     
+                    # FADE DE OPACIDADE PARA FOTOS GIGANTES (REVERSO)
+                    # Começam VISÍVEIS, vão ficando INVISÍVEIS conforme aumentam de tamanho
+                    if info['eh_gigante']:
+                        escala_final_gigante = info['escala_final_gigante']
+                        
+                        # Calcula opacidade baseada no tamanho atual (reverso da entrada)
+                        if escala_atual > escala_final_gigante:
+                            # Já está maior que o tamanho "gigante" - em processo de fade out
+                            # progresso_fade_opacidade: 1 = visível, 0 = invisível
+                            progresso_fade_opacidade = 1 - ((escala_atual - escala_final_gigante) / 
+                                                            (info['escala_inicial'] - escala_final_gigante))
+                            progresso_fade_opacidade = max(0, min(1, progresso_fade_opacidade))
+                        else:
+                            # Ainda não passou do tamanho gigante - totalmente visível
+                            progresso_fade_opacidade = 1.0
+                    else:
+                        # Fotos normais e destaque: sempre visíveis (sem fade)
+                        progresso_fade_opacidade = 1.0
+                    
                     # TRANSIÇÃO DE FOTO NA SAÍDA: Com Máscara → Original
                     # Nos primeiros 20%: faz fade de com máscara para original
                     # Depois (20% a 100%): usa foto original
@@ -823,6 +882,15 @@ def criar_video_album(largura_video, altura_video, nome_saida, caminho_mascara):
                     else:
                         # Já saindo: usa foto ORIGINAL (sem máscara)
                         foto_atual = info['foto_original']
+                    
+                    # APLICA FADE DE OPACIDADE (para fotos gigantes que vão ficando invisíveis)
+                    if progresso_fade_opacidade < 1.0:
+                        # Mistura com fundo branco para criar efeito de transparência/invisibilidade
+                        fundo_branco = np.ones_like(foto_atual) * 255
+                        foto_atual = (
+                            foto_atual * progresso_fade_opacidade +
+                            fundo_branco * (1 - progresso_fade_opacidade)
+                        ).astype(np.uint8)
                     
                     # Adiciona à lista de fotos animando com seu progresso
                     fotos_animando_lista.append({
