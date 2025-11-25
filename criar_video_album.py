@@ -66,11 +66,10 @@ PASTA_IMAGENS = "MOSAIC"
 FPS = 30
 
 # Configurações de animação (compartilhadas)
-# Para atingir 30s com ~35 ondas: tempo_total = (num_ondas - 1) * DELAY + DURACAO
-# 30s = 34 * 0.8 + 2.8 = 27.2 + 2.8 = 30s ✓
-DURACAO_POR_ONDA = 5.6  # Segundos que cada onda leva para aparecer/desaparecer
-DELAY_ENTRE_ONDAS = 1.6  # Segundos de delay entre início de cada onda (sobreposição)
-DURACAO_PAUSA_MEIO = 13  # 3s fade Máscara1→Máscara2 + 10s mantém Máscara2 (vídeo termina na Máscara2)
+# Entrada: ~30 segundos | Pausa: 7 segundos (4s fade + 3s estático)
+DURACAO_POR_ONDA = 3.0  # Segundos que cada onda leva para aparecer
+DELAY_ENTRE_ONDAS = 0.8  # Segundos de delay entre início de cada onda (sobreposição)
+DURACAO_PAUSA_MEIO = 7  # 4s fade Máscara1→Máscara2 + 3s mantém Máscara2 (vídeo termina na Máscara2)
 TRANSPARENCIA_MASCARA = 0.85  # Transparência da máscara aplicada em cada foto (0.0 = invisível, 1.0 = opaca)
 
 # Configurações de destaque e variação de tamanho (compartilhadas)
@@ -99,11 +98,12 @@ ESCALA_DESTAQUE_MAX = 9.0  # Fotos em destaque entram com até 400% do tamanho
 VIDEOS_PARA_GERAR = [
     {
         'nome': 'Mosaico_Pixel_6384x1344.mp4',
-        'largura': 3192,  # 50% de 6384 (resolução compatível)
-        'altura': 672,    # 50% de 1344 (resolução compatível)
-        'descricao': 'Video em alta resolucao (50% da original 6384x1344)',
-        'mascara': 'fundoaltosemtexto.png',  # Máscara específica para alta resolução (3192x672)
-        'mascara2': 'fundoalto.png'
+        'largura': 6384,  # Resolução COMPLETA (100%)
+        'altura': 1344,   # Resolução COMPLETA (aspect ratio 4.75:1 ultrawide)
+        'descricao': 'Video em resolucao COMPLETA 6384x1344',
+        'mascara': 'fundoaltosemtexto.png',  # Máscara será redimensionada automaticamente
+        'mascara2': 'fundoalto.png',
+        'celula_base': 112  # Células maiores = menos imagens (~684 imagens)
     },
     {
         'nome': 'Mosaico_Pixel_1680x1176.mp4',
@@ -111,7 +111,8 @@ VIDEOS_PARA_GERAR = [
         'altura': 1176,
         'descricao': 'Video em resolucao alternativa',
         'mascara': 'fundobaixosemtexto.png',  # Máscara específica para resolução alternativa (1680x1176)
-        'mascara2': 'fundobaixo.png'
+        'mascara2': 'fundobaixo.png',
+        'celula_base': 56   # Células menores = mais imagens (mantém original ~900 imagens)
     }
 ]
 
@@ -334,7 +335,7 @@ def listar_imagens(pasta):
     imagens = sorted(list(set(imagens)))
     return imagens
 
-def criar_video_album(largura_video, altura_video, nome_saida, caminho_mascara, caminho_mascara2):
+def criar_video_album(largura_video, altura_video, nome_saida, caminho_mascara, caminho_mascara2, tamanho_celula_base=56):
     """Cria o vídeo com efeito de álbum de fotos - todas as fotos em um único grid
     
     Args:
@@ -343,13 +344,15 @@ def criar_video_album(largura_video, altura_video, nome_saida, caminho_mascara, 
         nome_saida: Nome do arquivo de vídeo a ser gerado
         caminho_mascara: Caminho para o arquivo de máscara principal (usada durante entrada/saída)
         caminho_mascara2: Caminho para o arquivo de máscara secundária (usada durante a pausa)
+        tamanho_celula_base: Tamanho base da célula em pixels (padrão: 56)
     """
     
     # Calcula configurações específicas para esta resolução
     # Grid com células QUADRADAS que PREENCHEM COMPLETAMENTE o vídeo
-    # TAMANHO_CELULA_BASE reduzido para DOBRAR a quantidade de imagens!
-    # 56px = células menores = mais imagens (aprox. 2x mais que 84px)
-    TAMANHO_CELULA_BASE = 56  # Reduzido de 168 para ter ~2x mais imagens
+    # TAMANHO_CELULA_BASE específico por vídeo (passado como parâmetro)
+    # Vídeo 6K: 112px (células maiores = menos imagens ~684)
+    # Vídeo 1680x1176: 56px (células menores = mais imagens ~900)
+    TAMANHO_CELULA_BASE = tamanho_celula_base  # Usa o valor passado por parâmetro
     
     # Calcula o tamanho da célula que melhor se ajusta à resolução atual
     # Tenta encontrar um divisor comum que resulte em células próximas de 56px
@@ -817,16 +820,16 @@ def criar_video_album(largura_video, altura_video, nome_saida, caminho_mascara, 
     print(f"  ✅ Animação de entrada completa! {len(info_fotos)} fotos no grid")
     
     # Pausa no meio - com transição entre máscaras
-    print(f"\n⏸️  Gerando pausa do meio ({DURACAO_PAUSA_MEIO} segundos)...")
-    print(f"   Com transição: Máscara1 → Máscara2 (e termina na Máscara2)")
+    print(f"\n⏸️  Gerando transição final ({DURACAO_PAUSA_MEIO} segundos)...")
+    print(f"   4s: Fade Máscara1 → Máscara2 | 3s: Mantém Máscara2 (fim do vídeo)")
     
     total_frames_pausa = int(FPS * DURACAO_PAUSA_MEIO)
     
     # Define as 2 fases da pausa:
-    # Fase 1: Fade rápido para máscara2 (3 segundos)
-    # Fase 2: Mantém máscara2 até o final (restante = 10 segundos quando DURACAO_PAUSA_MEIO=13)
-    frames_fade_entrada = int(FPS * 3)  # 3 segundos para o fade
-    frames_meio = total_frames_pausa - frames_fade_entrada  # Resto mantém máscara2
+    # Fase 1: Fade para máscara2 (4 segundos)
+    # Fase 2: Mantém máscara2 até o final (3 segundos quando DURACAO_PAUSA_MEIO=7)
+    frames_fade_entrada = int(FPS * 4)  # 4 segundos para o fade
+    frames_meio = total_frames_pausa - frames_fade_entrada  # Resto mantém máscara2 (3s)
     
     print(f"   • Fade para máscara2: {frames_fade_entrada / FPS:.1f}s")
     print(f"   • Mantém máscara2 até o final: {frames_meio / FPS:.1f}s")
@@ -989,7 +992,7 @@ def criar_video_album(largura_video, altura_video, nome_saida, caminho_mascara, 
     print(f"   • Resolução: {largura_video}x{altura_video}")
     print(f"   • Duração total: {duracao_total:.1f} segundos ({duracao_total/60:.1f} minutos)")
     print(f"   • Duração da entrada: {duracao_entrada:.1f} segundos")
-    print(f"   • Duração da transição final: {DURACAO_PAUSA_MEIO} segundos (3s fade + 10s estático)")
+    print(f"   • Duração da transição final: {DURACAO_PAUSA_MEIO} segundos (4s fade + 3s estático)")
     # Sem saída - vídeo termina na Máscara2
     print(f"   • FPS: {FPS}")
     print(f"   • Total de fotos: {len(lista_imagens)}")
@@ -1002,8 +1005,8 @@ def criar_video_album(largura_video, altura_video, nome_saida, caminho_mascara, 
     print(f"   • Máscara 2 (final): {caminho_mascara2} ({int(TRANSPARENCIA_MASCARA * 100)}%)")
     print(f"\n🔄 Estrutura do vídeo:")
     print(f"   1. Entrada das fotos: {duracao_entrada:.1f}s (Fade: Original → Máscara1)")
-    print(f"   2. Transição final: {DURACAO_PAUSA_MEIO}s (Fade: Máscara1 → Máscara2)")
-    print(f"   3. Vídeo termina com Máscara2 aplicada (10s estático)")
+    print(f"   2. Transição final: {DURACAO_PAUSA_MEIO}s (Fade: Máscara1 → Máscara2 em 4s + 3s estático)")
+    print(f"   3. Vídeo termina com Máscara2 aplicada")
     print("\n" + "="*60)
 
 if __name__ == "__main__":
@@ -1027,7 +1030,8 @@ if __name__ == "__main__":
             altura_video=config['altura'],
             nome_saida=config['nome'],
             caminho_mascara=config['mascara'],
-            caminho_mascara2=config['mascara2']
+            caminho_mascara2=config['mascara2'],
+            tamanho_celula_base=config.get('celula_base', 56)  # Tamanho específico por vídeo
         )
     
     print("\n\n" + "="*80)
