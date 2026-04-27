@@ -49,6 +49,8 @@ import math
 import random
 import time
 import sys
+import multiprocessing
+from concurrent.futures import ProcessPoolExecutor, as_completed
 
 # Importa módulo de detecção de rosto
 from detectar_rosto import carregar_e_redimensionar_com_deteccao_rosto
@@ -71,6 +73,7 @@ DURACAO_POR_ONDA = 3.0  # Segundos que cada onda leva para aparecer
 DELAY_ENTRE_ONDAS = 0.8  # Segundos de delay entre início de cada onda (sobreposição)
 DURACAO_PAUSA_MEIO = 7  # 4s fade Máscara1→Máscara2 + 3s mantém Máscara2 (vídeo termina na Máscara2)
 TRANSPARENCIA_MASCARA = 0.85  # Transparência da máscara aplicada em cada foto (0.0 = invisível, 1.0 = opaca)
+OPACIDADE_FOTO_ENCAIXADA = 0.55  # Opacidade das fotos após encaixarem no mosaico
 
 # Configurações de destaque e variação de tamanho (compartilhadas)
 # NUM_FOTOS_GIGANTES = 100  # [COMENTADO] Número mínimo de fotos que aparecem GIGANTES na tela
@@ -218,7 +221,7 @@ def rotacionar_imagem(imagem, angulo, centro_x, centro_y):
     
     return imagem_rotacionada, nova_largura, nova_altura
 
-def desenhar_foto_em_posicao(frame, foto, x, y, largura_foto, altura_foto, largura_video, altura_video, angulo=0, escala=1.0, respeitar_limites_celula=False):
+def desenhar_foto_em_posicao(frame, foto, x, y, largura_foto, altura_foto, largura_video, altura_video, angulo=0, escala=1.0, respeitar_limites_celula=False, opacidade=1.0):
     """Desenha a foto no frame, com rotação e escala opcionais.
     
     Args:
@@ -312,10 +315,26 @@ def desenhar_foto_em_posicao(frame, foto, x, y, largura_foto, altura_foto, largu
             cor_fundo = np.array([244, 200, 102])
             diferenca = np.abs(foto_regiao.astype(np.int16) - cor_fundo)
             mascara = np.any(diferenca > 5, axis=2)  # Pixel é diferente do fundo
-            regiao[mascara] = foto_regiao[mascara]
+            if opacidade >= 0.999:
+                regiao[mascara] = foto_regiao[mascara]
+            else:
+                regiao_float = regiao.astype(np.float32)
+                foto_float = foto_regiao.astype(np.float32)
+                regiao_float[mascara] = (
+                    regiao_float[mascara] * (1.0 - opacidade) +
+                    foto_float[mascara] * opacidade
+                )
+                regiao[:] = regiao_float.astype(np.uint8)
         else:
-            frame[y_dst_start:y_dst_end, x_dst_start:x_dst_end] = \
-                foto_atual[y_src_start:y_src_end, x_src_start:x_src_end]
+            destino = frame[y_dst_start:y_dst_end, x_dst_start:x_dst_end]
+            origem = foto_atual[y_src_start:y_src_end, x_src_start:x_src_end]
+            if opacidade >= 0.999:
+                destino[:] = origem
+            else:
+                destino[:] = (
+                    destino.astype(np.float32) * (1.0 - opacidade) +
+                    origem.astype(np.float32) * opacidade
+                ).astype(np.uint8)
         
         # [BORDA REMOVIDA] - Imagens ficam encostadas sem separação visual
         # if angulo == 0 and x >= 0 and y >= 0 and x + largura_foto <= largura_video and y + altura_foto <= altura_video:
@@ -593,8 +612,7 @@ def criar_video_album(largura_video, altura_video, nome_saida, caminho_mascara, 
             'nome': Path(lista_imagens[i]).name
         })
     
-    # Randomiza a ordem de entrada
-    random.shuffle(info_fotos)
+    # Mantém a ordem natural das posições do mosaico (sem embaralhar)
     
     print(f"   ✅ {len(info_fotos)} fotos configuradas")
     print(f"   ⭐ TODAS as fotos usam ESCALA_DESTAQUE ({ESCALA_DESTAQUE_MIN}x a {ESCALA_DESTAQUE_MAX}x)")
@@ -780,6 +798,14 @@ def criar_video_album(largura_video, altura_video, nome_saida, caminho_mascara, 
                             info['foto_com_mascara'] * progresso_fade
                         ).astype(np.uint8)
                     
+                    # Ao encaixar, a foto fica parcialmente transparente
+                    # para revelar melhor a imagem de fundo formada pela máscara.
+                    if progresso_foto < 0.80:
+                        opacidade_encaixe = 1.0
+                    else:
+                        progresso_transparencia = (progresso_foto - 0.80) / 0.20
+                        opacidade_encaixe = 1.0 + (OPACIDADE_FOTO_ENCAIXADA - 1.0) * progresso_transparencia
+                    
                     # APLICA FADE DE OPACIDADE (para fotos gigantes que começam invisíveis)
                     if progresso_fade_opacidade < 1.0:
                         # Mistura com fundo cor #f4c866 para criar efeito de transparência/invisibilidade
@@ -797,7 +823,8 @@ def criar_video_album(largura_video, altura_video, nome_saida, caminho_mascara, 
                         largura_foto, altura_foto,
                         largura_video, altura_video,
                         angulo=angulo_atual,
-                        escala=escala_atual
+                        escala=escala_atual,
+                        opacidade=opacidade_encaixe
                     )
             
             else:
@@ -810,7 +837,8 @@ def criar_video_album(largura_video, altura_video, nome_saida, caminho_mascara, 
                         largura_video, altura_video,
                         angulo=0,
                         escala=1.0,
-                        respeitar_limites_celula=True  # Posição final: cada imagem na sua célula!
+                        respeitar_limites_celula=True,  # Posição final: cada imagem na sua célula!
+                        opacidade=OPACIDADE_FOTO_ENCAIXADA
                     )
         
         # Escreve o frame
@@ -860,7 +888,8 @@ def criar_video_album(largura_video, altura_video, nome_saida, caminho_mascara, 
                     info['x_final'], info['y_final'],
                     largura_foto, altura_foto,
                     largura_video, altura_video,
-                    respeitar_limites_celula=True  # Grid parado: cada imagem na sua célula!
+                    respeitar_limites_celula=True,  # Grid parado: cada imagem na sua célula!
+                    opacidade=OPACIDADE_FOTO_ENCAIXADA
                 )
         
         else:
@@ -871,7 +900,8 @@ def criar_video_album(largura_video, altura_video, nome_saida, caminho_mascara, 
                     info['x_final'], info['y_final'],
                     largura_foto, altura_foto,
                     largura_video, altura_video,
-                    respeitar_limites_celula=True  # Grid parado: cada imagem na sua célula!
+                    respeitar_limites_celula=True,  # Grid parado: cada imagem na sua célula!
+                    opacidade=OPACIDADE_FOTO_ENCAIXADA
                 )
         
         # Escreve frame no vídeo
@@ -1009,36 +1039,82 @@ def criar_video_album(largura_video, altura_video, nome_saida, caminho_mascara, 
     print(f"   3. Vídeo termina com Máscara2 aplicada")
     print("\n" + "="*60)
 
-if __name__ == "__main__":
+def gerar_video_por_config(config):
+    """Wrapper para gerar um único vídeo a partir de uma config."""
+    criar_video_album(
+        largura_video=config['largura'],
+        altura_video=config['altura'],
+        nome_saida=config['nome'],
+        caminho_mascara=config['mascara'],
+        caminho_mascara2=config['mascara2'],
+        tamanho_celula_base=config.get('celula_base', 56)
+    )
+    return config['nome']
+
+
+def gerar_todos_os_videos(paralelo=True, nomes_videos=None):
+    """Gera todos os vídeos configurados em VIDEOS_PARA_GERAR."""
+    videos_para_gerar = VIDEOS_PARA_GERAR
+    if nomes_videos:
+        nomes_set = set(nomes_videos)
+        videos_para_gerar = [cfg for cfg in VIDEOS_PARA_GERAR if cfg["nome"] in nomes_set]
+        if not videos_para_gerar:
+            print("⚠️ Nenhum vídeo selecionado para geração.")
+            return
+
     print("\n" + "="*80)
     print("GERADOR DE VIDEOS DE ALBUM DE FOTOS")
     print("="*80)
     print(f"\nConfiguracao:")
-    print(f"   Total de videos a gerar: {len(VIDEOS_PARA_GERAR)}")
-    for i, config in enumerate(VIDEOS_PARA_GERAR, 1):
+    print(f"   Total de videos a gerar: {len(videos_para_gerar)}")
+    for i, config in enumerate(videos_para_gerar, 1):
         print(f"   {i}. {config['nome']} - {config['largura']}x{config['altura']} - {config['descricao']}")
     print("\n" + "="*80)
     
-    # Gera cada vídeo configurado
-    for i, config in enumerate(VIDEOS_PARA_GERAR, 1):
-        print(f"\n\n{'='*80}")
-        print(f"GERANDO VIDEO {i}/{len(VIDEOS_PARA_GERAR)}")
-        print(f"{'='*80}")
-        
-        criar_video_album(
-            largura_video=config['largura'],
-            altura_video=config['altura'],
-            nome_saida=config['nome'],
-            caminho_mascara=config['mascara'],
-            caminho_mascara2=config['mascara2'],
-            tamanho_celula_base=config.get('celula_base', 56)  # Tamanho específico por vídeo
-        )
+    if paralelo and len(videos_para_gerar) > 1:
+        max_workers = min(len(videos_para_gerar), max(1, multiprocessing.cpu_count() - 1))
+        print(f"\n⚙️ Modo paralelo ativado (multiprocessing)")
+        print(f"   • Workers: {max_workers}")
+        print(f"   • Vídeos serão gerados em paralelo")
+
+        try:
+            contexto = multiprocessing.get_context("spawn")
+            with ProcessPoolExecutor(max_workers=max_workers, mp_context=contexto) as executor:
+                futuros = {
+                    executor.submit(gerar_video_por_config, config): config
+                    for config in videos_para_gerar
+                }
+
+                concluidos = 0
+                for futuro in as_completed(futuros):
+                    config = futuros[futuro]
+                    concluidos += 1
+                    try:
+                        nome = futuro.result()
+                        print(f"\n✅ [{concluidos}/{len(videos_para_gerar)}] Concluído: {nome}")
+                    except Exception as e:
+                        print(f"\n❌ [{concluidos}/{len(videos_para_gerar)}] Falha em {config['nome']}: {e}")
+        except Exception as e:
+            print(f"\n⚠️ Falha no modo paralelo: {e}")
+            print("   Revertendo para geração sequencial...")
+            for i, config in enumerate(videos_para_gerar, 1):
+                print(f"\n\n{'='*80}")
+                print(f"GERANDO VIDEO {i}/{len(videos_para_gerar)}")
+                print(f"{'='*80}")
+                gerar_video_por_config(config)
+    else:
+        # Geração sequencial (caso haja um vídeo só, ou paralelo desativado)
+        for i, config in enumerate(videos_para_gerar, 1):
+            print(f"\n\n{'='*80}")
+            print(f"GERANDO VIDEO {i}/{len(videos_para_gerar)}")
+            print(f"{'='*80}")
+            gerar_video_por_config(config)
     
     print("\n\n" + "="*80)
     print("TODOS OS VIDEOS FORAM GERADOS COM SUCESSO!")
     print("="*80)
     print("\nArquivos gerados:")
-    for i, config in enumerate(VIDEOS_PARA_GERAR, 1):
+    for i, config in enumerate(videos_para_gerar, 1):
         if os.path.exists(config['nome']):
             tamanho_mb = os.path.getsize(config['nome']) / (1024 * 1024)
             print(f"   {i}. OK: {config['nome']} ({tamanho_mb:.1f} MB)")
@@ -1046,3 +1122,6 @@ if __name__ == "__main__":
             print(f"   {i}. ERRO: {config['nome']} (FALHOU na geracao)")
     print("\n" + "="*80)
 
+
+if __name__ == "__main__":
+    gerar_todos_os_videos()

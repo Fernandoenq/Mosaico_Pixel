@@ -27,20 +27,21 @@ if errorlevel 1 (
 echo ✅ Dependências instaladas!
 echo.
 
-echo [3/3] Criando vídeo...
+echo [3/3] Iniciando sistema (monitoramento + mosaico)...
 echo.
-python criar_video_album.py
+python main.py
 if errorlevel 1 (
     echo.
-    echo ❌ Erro ao criar vídeo!
+    echo ❌ Erro ao iniciar sistema!
     pause
     exit /b 1
 )
 
 echo.
 echo ========================================
-echo  ✅ Processo concluído!
-echo  📹 Vídeo salvo como: album_fotos.mp4
+echo  ✅ Sistema iniciado!
+echo  📥 Monitorando: Galeria\entrada
+echo  📹 Mosaicos serao gerados quando novas imagens chegarem
 echo ========================================
 echo.
 pause
