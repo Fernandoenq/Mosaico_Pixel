@@ -502,3 +502,5 @@ Cada execução gera um vídeo completamente diferente! 🎲
 - Resultado final: um mosaico completo com a imagem do `fundo.jpg` "transparecendo" através dele
 - É como ver o `fundo.jpg` sendo montado pedaço por pedaço, conforme as fotos vão chegando
 
+#   g a l e r i a - - - m o s a i c o  
+ 
