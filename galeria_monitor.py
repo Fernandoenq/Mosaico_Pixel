@@ -16,10 +16,30 @@ from criar_video_album import gerar_todos_os_videos
 
 PASTA_MOSAIC = Path("MOSAIC")
 
-EXTENSOES_SUPORTADAS = {".jpg", ".jpeg", ".png", ".bmp", ".webp", ".jfif"}
-INTERVALO_MONITORAMENTO = 2
+EXTENSOES_SUPORTADAS = {
+    ".jpg",
+    ".jpeg",
+    ".jpe",
+    ".png",
+    ".bmp",
+    ".webp",
+    ".jfif",
+    ".tif",
+    ".tiff",
+    ".heic",
+}
+INTERVALO_MONITORAMENTO = 1.0
 MOLDURA_PIXELS = 20
 COR_MOLDURA = (255, 255, 255)
+
+# Subpastas geradas/usadas pelo proprio sistema — nao devem ser monitoradas.
+SUBPASTAS_INTERNAS = {"com_moldura", "sem_moldura", "originais"}
+
+# Numero de varreduras seguidas em que o arquivo precisa aparecer estavel
+# (mesmo tamanho e mesma mtime) para ser considerado pronto. Garantia contra
+# capturas grandes via tether (Canon EOS Utility, Lightroom etc) que ainda
+# estao terminando de escrever no disco.
+ESTAVEL_VARREDURAS_NECESSARIAS = 2
 
 
 def garantir_pastas(
@@ -112,9 +132,9 @@ def processar_imagem(
 
     destino_original = pasta_originais / nome_img
     try:
-        shutil.move(str(caminho_imagem), str(destino_original))
+        shutil.copy2(str(caminho_imagem), str(destino_original))
     except Exception:
-        destino_original = caminho_imagem
+        destino_original = None
 
     log(f"✅ Processada: {caminho_imagem.name}")
     log(f"   • Sem moldura: {destino_sem_moldura}")
@@ -122,20 +142,69 @@ def processar_imagem(
         log(f"   • Com moldura: {destino_com_moldura}")
     else:
         log("   • Com moldura: desativado")
-    log(f"   • Original organizada em: {destino_original}")
+    log("   • Original mantida na pasta monitorada")
+    if destino_original is not None:
+        log(f"   • Copia em originais: {destino_original}")
     log(f"   • Enviada ao mosaico: {destino_mosaic}")
     return destino_mosaic
 
 
-def listar_novas_imagens(pasta_entrada: Path, processadas: set[str]) -> list[Path]:
-    imagens = []
+def listar_novas_imagens(
+    pasta_entrada: Path,
+    processadas: set[str],
+    pendentes: dict[str, tuple[int, int, int]] | None = None,
+) -> list[Path]:
+    """
+    Lista arquivos prontos para processar. Um arquivo so e considerado
+    "pronto" quando aparece com o mesmo tamanho e mesma mtime em
+    ESTAVEL_VARREDURAS_NECESSARIAS varreduras consecutivas.
+
+    Isso evita pegar arquivos ainda sendo escritos por outras ferramentas
+    (Canon EOS Utility, drivers de tether, sync de bucket, etc).
+    """
+    pendentes = pendentes if pendentes is not None else {}
+    imagens: list[Path] = []
+    vistos_agora: set[str] = set()
+
     for caminho in sorted(pasta_entrada.iterdir()):
         if not caminho.is_file() or caminho.suffix.lower() not in EXTENSOES_SUPORTADAS:
             continue
 
-        assinatura = f"{caminho.resolve()}::{caminho.stat().st_mtime_ns}"
-        if assinatura not in processadas:
+        try:
+            stat_atual = caminho.stat()
+        except (FileNotFoundError, PermissionError):
+            continue
+
+        try:
+            chave = str(caminho.resolve())
+        except Exception:
+            chave = str(caminho)
+        vistos_agora.add(chave)
+
+        assinatura = f"{chave}::{stat_atual.st_mtime_ns}"
+        if assinatura in processadas:
+            continue
+
+        anterior = pendentes.get(chave)
+        if (
+            anterior is not None
+            and anterior[0] == stat_atual.st_size
+            and anterior[1] == stat_atual.st_mtime_ns
+        ):
+            estaveis = anterior[2] + 1
+        else:
+            estaveis = 1
+
+        if estaveis >= ESTAVEL_VARREDURAS_NECESSARIAS:
             imagens.append(caminho)
+            pendentes.pop(chave, None)
+        else:
+            pendentes[chave] = (stat_atual.st_size, stat_atual.st_mtime_ns, estaveis)
+
+    # Remove entradas pendentes para arquivos que sumiram (renomeio/movido).
+    for chave in list(pendentes.keys()):
+        if chave not in vistos_agora:
+            pendentes.pop(chave, None)
 
     return imagens
 
@@ -169,7 +238,8 @@ def monitorar_e_gerar(
     pasta_entrada_path, pasta_com_moldura, pasta_sem_moldura, pasta_originais = _resolver_estrutura_galeria(pasta_entrada_path)
 
     garantir_pastas(pasta_entrada_path, pasta_com_moldura, pasta_sem_moldura, pasta_originais)
-    processadas = set()
+    processadas: set[str] = set()
+    pendentes: dict[str, tuple[int, int, int]] = {}
     proximo_indice = _proximo_indice_img(pasta_com_moldura, pasta_sem_moldura, pasta_originais, PASTA_MOSAIC)
 
     update_status("Monitorando")
@@ -212,7 +282,7 @@ def monitorar_e_gerar(
 
     try:
         while not stop_signal.is_set():
-            novas = listar_novas_imagens(pasta_entrada_path, processadas)
+            novas = listar_novas_imagens(pasta_entrada_path, processadas, pendentes)
             houve_processamento = False
 
             for caminho in novas:

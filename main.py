@@ -39,6 +39,10 @@ class GaleriaMonitorApp:
         self.painel_ao_vivo_var = tk.BooleanVar(value=True)
         self.reload_automatico_var = tk.BooleanVar(value=True)
         self.celula_var = tk.IntVar(value=90)
+        # Espaço entre cada foto no painel ao vivo (ms) — evita travar a UI com rajadas.
+        self.intervalo_mosaico_ms_var = tk.IntVar(value=420)
+        self.animacao_var = tk.StringVar(value="Soft Zoom Fade-In")
+        self.intensidade_animacao_var = tk.StringVar(value="Medio")
 
         screen_w = self.root.winfo_screenwidth()
         screen_h = self.root.winfo_screenheight()
@@ -52,6 +56,10 @@ class GaleriaMonitorApp:
         self._ultimo_evento_imagem_ts = 0.0
         self._stagger_em_execucao = False
         self._idle_para_stagger_s = 3.5
+
+        self._mosaic_pending = queue.Queue()
+        self._mosaic_feeder_active = False
+        self._mosaic_feed_after_id = None
 
         self._configurar_estilo()
         self._build_ui()
@@ -181,10 +189,47 @@ class GaleriaMonitorApp:
         ttk.Label(tamanho_row, text="Celula").grid(row=0, column=4, sticky="w")
         ttk.Entry(tamanho_row, textvariable=self.celula_var, width=8, style="App.TEntry").grid(row=0, column=5, padx=(6, 0))
 
-        ttk.Button(card_esquerdo, text="Usar metade da tela", style="Secondary.TButton", command=self._usar_metade_tela).grid(row=10, column=0, sticky="w")
+        timing_row = ttk.Frame(card_esquerdo, style="Card.TFrame")
+        timing_row.grid(row=10, column=0, sticky="ew", pady=(0, 10))
+        ttk.Label(timing_row, text="Intervalo entre fotos no painel (ms)").grid(row=0, column=0, sticky="w")
+        ttk.Entry(timing_row, textvariable=self.intervalo_mosaico_ms_var, width=8, style="App.TEntry").grid(
+            row=0, column=1, padx=(8, 0), sticky="w"
+        )
+        ttk.Label(
+            timing_row,
+            text="Maior = mais suave; menor = mais rapido.",
+            style="Hint.TLabel",
+        ).grid(row=0, column=2, padx=(12, 0), sticky="w")
+
+        anim_row = ttk.Frame(card_esquerdo, style="Card.TFrame")
+        anim_row.grid(row=11, column=0, sticky="ew", pady=(0, 10))
+        anim_row.columnconfigure(1, weight=1)
+        ttk.Label(anim_row, text="Animacao").grid(row=0, column=0, sticky="w")
+        ttk.Combobox(
+            anim_row,
+            textvariable=self.animacao_var,
+            values=(
+                "Soft Zoom Fade-In",
+                "Hero Spotlight Pulse",
+                "Staggered Grid Cascade",
+                "Pure Fade Mosaic",
+            ),
+            state="readonly",
+            width=26,
+        ).grid(row=0, column=1, sticky="ew", padx=(8, 10))
+        ttk.Label(anim_row, text="Intensidade").grid(row=0, column=2, sticky="w")
+        ttk.Combobox(
+            anim_row,
+            textvariable=self.intensidade_animacao_var,
+            values=("Suave", "Medio", "Forte"),
+            state="readonly",
+            width=10,
+        ).grid(row=0, column=3, sticky="w", padx=(8, 0))
+
+        ttk.Button(card_esquerdo, text="Usar metade da tela", style="Secondary.TButton", command=self._usar_metade_tela).grid(row=12, column=0, sticky="w")
 
         botoes = ttk.Frame(card_esquerdo, style="Card.TFrame")
-        botoes.grid(row=11, column=0, sticky="ew", pady=(12, 0))
+        botoes.grid(row=13, column=0, sticky="ew", pady=(12, 0))
         self.btn_iniciar = ttk.Button(
             botoes, text="Iniciar monitoramento", style="Primary.TButton", command=self._iniciar_monitoramento
         )
@@ -219,6 +264,9 @@ class GaleriaMonitorApp:
             self.largura_painel_var,
             self.altura_painel_var,
             self.celula_var,
+            self.intervalo_mosaico_ms_var,
+            self.animacao_var,
+            self.intensidade_animacao_var,
             self.fundo_painel_var,
         ]
         for var in variaveis:
@@ -226,11 +274,23 @@ class GaleriaMonitorApp:
 
     def _atualizar_resumo_callback(self, *_):
         self._atualizar_resumo()
+        self._sincronizar_frontend_web()
+
+    def _sincronizar_frontend_web(self):
+        try:
+            self.web_frontend.update_settings(
+                animation_mode=self._animation_mode_key(self.animacao_var.get()),
+                animation_intensity=self.intensidade_animacao_var.get().strip().lower(),
+                tile_interval_ms=int(self.intervalo_mosaico_ms_var.get() or 420),
+            )
+        except Exception:
+            pass
 
     def _atualizar_resumo(self):
         largura = max(320, int(self.largura_painel_var.get() or 320))
         altura = max(240, int(self.altura_painel_var.get() or 240))
         celula = max(40, int(self.celula_var.get() or 40))
+        intervalo_ms = max(80, min(8000, int(self.intervalo_mosaico_ms_var.get() or 420)))
         colunas = max(1, largura // celula)
         linhas = max(1, altura // celula)
         total = colunas * linhas
@@ -238,6 +298,8 @@ class GaleriaMonitorApp:
         reload_auto = "Ativo" if self.reload_automatico_var.get() else "Desativado"
         modo = "Rapido" if self.modo_rapido_var.get() else "Completo"
         moldura = "Nao" if self.sem_moldura_var.get() else "Sim"
+        animacao = self.animacao_var.get().strip() or "Soft Zoom Fade-In"
+        intensidade = self.intensidade_animacao_var.get().strip() or "Medio"
         resumo = (
             f"- Modo: {modo}\n"
             f"- Aplicar moldura: {moldura}\n"
@@ -245,6 +307,8 @@ class GaleriaMonitorApp:
             f"- Reload automatico: {reload_auto}\n"
             f"- Tamanho do painel: {largura}x{altura}\n"
             f"- Grade estimada: {colunas} x {linhas} ({total} fotos)\n"
+            f"- Intervalo entre fotos no painel: {intervalo_ms} ms\n"
+            f"- Animacao: {animacao} ({intensidade})\n"
             f"- Fundo selecionado: {'Sim' if self.fundo_painel_var.get().strip() else 'Nao'}"
         )
         self.summary_var.set(resumo)
@@ -255,8 +319,20 @@ class GaleriaMonitorApp:
             int(self.largura_painel_var.get()),
             int(self.altura_painel_var.get()),
             int(self.celula_var.get()),
+            self.animacao_var.get().strip(),
+            self.intensidade_animacao_var.get().strip(),
             self.fundo_painel_var.get().strip(),
         )
+
+    @staticmethod
+    def _animation_mode_key(label: str) -> str:
+        mapa = {
+            "Soft Zoom Fade-In": "soft_zoom_fade",
+            "Hero Spotlight Pulse": "hero_spotlight_pulse",
+            "Staggered Grid Cascade": "staggered_grid_cascade",
+            "Pure Fade Mosaic": "pure_fade_mosaic",
+        }
+        return mapa.get((label or "").strip(), "soft_zoom_fade")
 
     def _painel_ativo(self):
         return (
@@ -267,19 +343,27 @@ class GaleriaMonitorApp:
         )
 
     def _recriar_painel_ao_vivo(self):
+        self._mosaic_cancel_feeder()
         if self.live_panel is not None:
             try:
                 self.live_panel.window.destroy()
             except Exception:
                 pass
+            self.live_panel = None
         self.live_panel = LiveMosaicPanel(
             master=self.root,
             largura=self.largura_painel_var.get(),
             altura=self.altura_painel_var.get(),
             fundo_path=self.fundo_painel_var.get().strip() or None,
             celula_px=self.celula_var.get(),
+            animation_mode=self._animation_mode_key(self.animacao_var.get()),
+            animation_intensity=self.intensidade_animacao_var.get().strip().lower(),
         )
         self._ultima_assinatura_painel = self._assinatura_painel()
+        try:
+            self.root.after(0, self._mosaic_try_start_feeder)
+        except tk.TclError:
+            pass
 
     def _auto_reload_tick(self):
         try:
@@ -366,11 +450,63 @@ class GaleriaMonitorApp:
                     self.log_var.set(message)
                 elif msg_type == "status":
                     self.status_var.set(f"Status: {message}")
-                elif msg_type == "nova_imagem" and self.live_panel is not None:
-                    self.live_panel.add_image(message)
         except queue.Empty:
             pass
         self.root.after(150, self._poll_logs)
+
+    def _mosaic_cancel_feeder(self):
+        if self._mosaic_feed_after_id is not None:
+            try:
+                self.root.after_cancel(self._mosaic_feed_after_id)
+            except tk.TclError:
+                pass
+            self._mosaic_feed_after_id = None
+        self._mosaic_feeder_active = False
+
+    def _mosaic_drain_pending(self):
+        while True:
+            try:
+                self._mosaic_pending.get_nowait()
+            except queue.Empty:
+                break
+
+    def _mosaic_try_start_feeder(self):
+        if self._mosaic_feeder_active:
+            return
+        if self.live_panel is None:
+            return
+        if self._mosaic_pending.empty():
+            return
+        self._mosaic_feeder_active = True
+        self._mosaic_feed_step()
+
+    def _mosaic_feed_step(self):
+        self._mosaic_feed_after_id = None
+        panel = self.live_panel
+        if panel is None:
+            self._mosaic_drain_pending()
+            self._mosaic_feeder_active = False
+            return
+        try:
+            path = self._mosaic_pending.get_nowait()
+        except queue.Empty:
+            self._mosaic_feeder_active = False
+            return
+        try:
+            panel.add_image(path)
+        except Exception as exc:
+            self.log_var.set(f"Falha ao adicionar no painel: {exc}")
+        try:
+            interval = max(80, min(8000, int(self.intervalo_mosaico_ms_var.get() or 420)))
+        except (tk.TclError, ValueError):
+            interval = 420
+        if self._mosaic_pending.empty():
+            self._mosaic_feeder_active = False
+            return
+        try:
+            self._mosaic_feed_after_id = self.root.after(interval, self._mosaic_feed_step)
+        except tk.TclError:
+            self._mosaic_feeder_active = False
 
     def _iniciar_monitoramento(self):
         pasta = Path(self.pasta_var.get().strip())
@@ -391,6 +527,8 @@ class GaleriaMonitorApp:
             return
 
         self.stop_event = threading.Event()
+        self._mosaic_cancel_feeder()
+        self._mosaic_drain_pending()
         self.btn_iniciar.config(state="disabled")
         self.btn_parar.config(state="normal")
         self.status_var.set("Status: Iniciando...")
@@ -398,6 +536,7 @@ class GaleriaMonitorApp:
         aplicar_moldura = not self.sem_moldura_var.get()
         modo_rapido = self.modo_rapido_var.get()
         try:
+            self._sincronizar_frontend_web()
             self.web_frontend.start(background_path=self.fundo_painel_var.get().strip() or None)
         except Exception as exc:
             self.log_var.set(f"Falha ao iniciar front web: {exc}")
@@ -425,11 +564,19 @@ class GaleriaMonitorApp:
     def _queue_new_image(self, image_path: str):
         self._ultimo_evento_imagem_ts = time.time()
         self._stagger_em_execucao = False
-        self.log_queue.put(("nova_imagem", image_path))
+        if not self.painel_ao_vivo_var.get():
+            return
+        self._mosaic_pending.put(image_path)
+        try:
+            self.root.after(0, self._mosaic_try_start_feeder)
+        except tk.TclError:
+            pass
 
     def _parar_monitoramento(self):
         if self.stop_event:
             self.stop_event.set()
+        self._mosaic_cancel_feeder()
+        self._mosaic_drain_pending()
         try:
             self.web_frontend.stop()
         except Exception:
@@ -466,6 +613,8 @@ class GaleriaMonitorApp:
     def _on_close(self):
         if self.stop_event:
             self.stop_event.set()
+        self._mosaic_cancel_feeder()
+        self._mosaic_drain_pending()
         try:
             self.web_frontend.stop()
         except Exception:

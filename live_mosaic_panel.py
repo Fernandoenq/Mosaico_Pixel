@@ -10,7 +10,16 @@ from PIL import Image, ImageDraw, ImageFilter, ImageOps, ImageTk
 
 
 class LiveMosaicPanel:
-    def __init__(self, master: tk.Tk, largura: int, altura: int, fundo_path: str | None = None, celula_px: int = 90):
+    def __init__(
+        self,
+        master: tk.Tk,
+        largura: int,
+        altura: int,
+        fundo_path: str | None = None,
+        celula_px: int = 90,
+        animation_mode: str = "soft_zoom_fade",
+        animation_intensity: str = "medio",
+    ):
         self.master = master
         self.width = max(320, int(largura))
         self.height = max(240, int(altura))
@@ -22,12 +31,19 @@ class LiveMosaicPanel:
         self._entrada_anim_ms = 520
         self._entrada_anim_frames = 11
         self._stagger_ms = 140
-        self._opacidade_mosaico = 0.58
+        # Mantém os tiles totalmente opacos para não aparentar "espaços" entre imagens.
+        self._opacidade_mosaico = 1.0
         self._spotlight_hold_ms = 1700
         self._spotlight_pop_ms = 920
         self._spotlight_sustain_ms = 2100
         self._spotlight_return_ms = 1200
         self._spotlight_scale_center = 3.2
+        # Prévia rápida (add_image): sem escurecer o mosaico inteiro — evita “pulo” ao fechar.
+        self._preview_spotlight_scale = 2.25
+        self._preview_hold_ms = 1300
+        self.animation_mode = (animation_mode or "soft_zoom_fade").strip().lower()
+        self.animation_intensity = (animation_intensity or "medio").strip().lower()
+        self._apply_animation_profile()
 
         self.window = tk.Toplevel(master)
         self.window.title("Mosaico Ao Vivo")
@@ -75,6 +91,19 @@ class LiveMosaicPanel:
         self._pending_spotlights.clear()
         self._queue_token += 1
 
+    def _apply_animation_profile(self):
+        perfis = {
+            "suave": {"entrada_ms": 360, "frames": 14, "preview_hold": 950, "preview_scale": 2.05, "spotlight_hold": 1250},
+            "medio": {"entrada_ms": 500, "frames": 11, "preview_hold": 1300, "preview_scale": 2.25, "spotlight_hold": 1700},
+            "forte": {"entrada_ms": 680, "frames": 9, "preview_hold": 1700, "preview_scale": 2.45, "spotlight_hold": 2200},
+        }
+        cfg = perfis.get(self.animation_intensity, perfis["medio"])
+        self._entrada_anim_ms = cfg["entrada_ms"]
+        self._entrada_anim_frames = cfg["frames"]
+        self._preview_hold_ms = cfg["preview_hold"]
+        self._preview_spotlight_scale = cfg["preview_scale"]
+        self._spotlight_hold_ms = cfg["spotlight_hold"]
+
     def _cell_xy(self, index: int):
         row = index // self.cols
         col = index % self.cols
@@ -121,6 +150,14 @@ class LiveMosaicPanel:
         base = bg_cell.convert("RGBA")
         return Image.alpha_composite(base, frame).convert("RGB")
 
+    def _compor_frame_tile_fade(self, tile_base: Image.Image, bg_cell: Image.Image, progress: float):
+        progress = max(0.0, min(1.0, progress))
+        tile_rgba = tile_base.convert("RGBA")
+        alpha = int(255 * progress * self._opacidade_mosaico)
+        tile_rgba.putalpha(alpha)
+        base = bg_cell.convert("RGBA")
+        return Image.alpha_composite(base, tile_rgba).convert("RGB")
+
     @staticmethod
     def _ease_out_cubic(t: float):
         t = max(0.0, min(1.0, t))
@@ -154,6 +191,40 @@ class LiveMosaicPanel:
             self.canvas.itemconfigure(self._tile_items[index], image=tile_imgtk)
             self.canvas.coords(self._tile_items[index], x, y)
         self._tile_refs.append(tile_imgtk)
+
+    def _render_tile_frame(self, index: int, progress: float, fade_only: bool = False):
+        tile = self._tile_images[index]
+        if tile is None:
+            return
+        x, y = self._cell_xy(index)
+        bg = self._cell_background(x, y)
+        if fade_only:
+            frame = self._compor_frame_tile_fade(tile, bg, progress=progress)
+        else:
+            frame = self._compor_frame_tile(tile, bg, progress=progress)
+        tile_imgtk = ImageTk.PhotoImage(frame)
+        if self._tile_items[index] is None:
+            self._tile_items[index] = self.canvas.create_image(x, y, anchor="nw", image=tile_imgtk, tags=("tiles",))
+        else:
+            self.canvas.itemconfigure(self._tile_items[index], image=tile_imgtk, state="normal")
+            self.canvas.coords(self._tile_items[index], x, y)
+        self._tile_refs.append(tile_imgtk)
+
+    def _animate_tile_entry(self, index: int, fade_only: bool = False, delay_ms: int = 0):
+        frames = max(3, self._entrada_anim_frames)
+        total = max(120, self._entrada_anim_ms)
+
+        for i in range(frames):
+            delay = delay_ms + int(total * i / max(1, frames - 1))
+
+            def _step(step=i):
+                if not self.window.winfo_exists():
+                    return
+                t = step / max(1, frames - 1)
+                p = self._ease_out_cubic(t)
+                self._render_tile_frame(index, progress=p, fade_only=fade_only)
+
+            self.window.after(delay, _step)
 
     def _set_focus_overlay(self, enabled: bool):
         if enabled:
@@ -375,6 +446,8 @@ class LiveMosaicPanel:
         """
         Mostra prévia central sem bloquear novas entradas.
         A imagem já é encaixada no mosaico imediatamente.
+        Não usa overlay em tela cheia: o overlay escurecia tudo e, ao sumir, causava
+        um flash perceptível (“bugadinha”) em relação ao tile já visível na grade.
         """
         tile = self._tile_images[index]
         if tile is None or not self.window.winfo_exists():
@@ -382,13 +455,12 @@ class LiveMosaicPanel:
 
         center_x = self.width // 2
         center_y = self.height // 2
-        self._set_focus_overlay(True)
 
         frame_rgba = self._build_spotlight_rgba(
             tile_base=tile,
-            scale=self._spotlight_scale_center,
+            scale=self._preview_spotlight_scale,
             blur_radius=0.0,
-            glow_strength=0.14,
+            glow_strength=0.08,
         )
         tk_img = ImageTk.PhotoImage(frame_rgba)
 
@@ -398,6 +470,10 @@ class LiveMosaicPanel:
             self.canvas.itemconfigure(self._spotlight_item, image=tk_img, state="normal")
             self.canvas.coords(self._spotlight_item, center_x, center_y)
         self._tile_refs.append(tk_img)
+        try:
+            self.canvas.tag_raise("spotlight")
+        except tk.TclError:
+            pass
 
         if self._preview_hide_job is not None:
             try:
@@ -411,10 +487,9 @@ class LiveMosaicPanel:
                 return
             if self._spotlight_item is not None:
                 self.canvas.itemconfigure(self._spotlight_item, state="hidden")
-            self._set_focus_overlay(False)
             self._preview_hide_job = None
 
-        self._preview_hide_job = self.window.after(self._spotlight_hold_ms, _hide_preview)
+        self._preview_hide_job = self.window.after(self._preview_hold_ms, _hide_preview)
 
     def add_image(self, image_path: str):
         if self.cursor >= self.max_cells:
@@ -429,13 +504,26 @@ class LiveMosaicPanel:
         if not caminho.exists():
             return
 
+        index = self.cursor
         with Image.open(caminho) as img:
             img = ImageOps.fit(img.convert("RGB"), (self.cell_size, self.cell_size), Image.Resampling.LANCZOS)
-            self._tile_images[self.cursor] = img.copy()
+            self._tile_images[index] = img.copy()
 
-        # Exibe no mosaico imediatamente e mostra destaque central sem bloquear próximas imagens.
-        self._render_tile_static(self.cursor)
-        self._show_center_preview_nonblocking(self.cursor)
+        if self.animation_mode == "pure_fade_mosaic":
+            self._animate_tile_entry(index, fade_only=True)
+        elif self.animation_mode == "hero_spotlight_pulse":
+            self._render_tile_static(index)
+            self._show_spotlight_sem_animacao(index)
+        elif self.animation_mode == "staggered_grid_cascade":
+            row = index // self.cols
+            col = index % self.cols
+            cascade_delay = min(220, (row * 16) + (col * 26))
+            self._animate_tile_entry(index, fade_only=False, delay_ms=cascade_delay)
+        else:
+            # soft_zoom_fade (padrão)
+            self._animate_tile_entry(index, fade_only=False)
+            self._show_center_preview_nonblocking(index)
+
         self.cursor += 1
 
     def clear_tiles(self):
