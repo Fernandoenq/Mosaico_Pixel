@@ -25,7 +25,7 @@ HTML_PAGE = """<!doctype html>
   <style>
     :root {
       --bg: #0f0f12;
-      --card: rgba(22, 24, 30, 0.15);
+      --card: transparent;
     }
     * { box-sizing: border-box; }
     body {
@@ -41,23 +41,21 @@ HTML_PAGE = """<!doctype html>
       inset: 0;
       background-size: cover;
       background-position: center;
-      filter: saturate(1.05);
+      background-repeat: no-repeat;
       z-index: -2;
-    }
-    .bg::after {
-      content: "";
-      position: absolute;
-      inset: 0;
-      background: linear-gradient(rgba(10, 8, 18, 0.25), rgba(10, 8, 18, 0.45));
-      z-index: -1;
+      /* Fundo Pic Brand visivel; filtros leves para nao travar a GPU */
+      filter: saturate(1.12) contrast(1.06) brightness(1.03);
+      transform: scale(1.02);
+      transform-origin: center center;
     }
     .grid {
-      --tile-size: 56px;
+      --tile-size: 120px;
       position: fixed;
       top: 0;
       left: 0;
       width: 100vw;
-      /* Faixa superior mais curta, semelhante ao layout de referência. */
+      z-index: 2;
+      /* Faixa superior curta; com .grid-fullscreen cobre o ecra (video cliente). */
       height: calc(var(--tile-size) * 6);
       padding: 0;
       display: flex;
@@ -66,9 +64,13 @@ HTML_PAGE = """<!doctype html>
       justify-content: flex-start;
       overflow: hidden;
     }
+    .grid.grid-fullscreen {
+      height: 100vh;
+      height: 100dvh;
+    }
     .grid.focused {
       filter: blur(2px) brightness(0.78);
-      transition: filter 220ms ease;
+      transition: filter 380ms cubic-bezier(0.22, 1, 0.36, 1);
     }
     .tile {
       width: var(--tile-size);
@@ -86,8 +88,10 @@ HTML_PAGE = """<!doctype html>
       object-fit: cover;
       image-rendering: auto;
       display: block;
-      opacity: 0.55;
-      mix-blend-mode: multiply;
+      /* Mais transparente sobre o fundo Pic Brand; sem multiply (evita tom esverdeado). */
+      opacity: 0.48;
+      mix-blend-mode: normal;
+      transition: opacity 0.35s ease;
     }
     .tile.anim-soft_zoom_fade {
       animation: softZoomFadeIn var(--entry-ms, 420ms) cubic-bezier(0.22, 1, 0.36, 1) both;
@@ -116,14 +120,19 @@ HTML_PAGE = """<!doctype html>
     .spotlight {
       position: fixed;
       inset: 0;
+      z-index: 3;
       display: grid;
       place-items: center;
       pointer-events: none;
       opacity: 0;
-      transition: opacity 180ms ease;
+      transition: opacity 260ms cubic-bezier(0.22, 1, 0.36, 1);
     }
     .spotlight.show {
       opacity: 1;
+    }
+    .spotlight.show.exit {
+      opacity: 0;
+      transition: opacity 340ms cubic-bezier(0.4, 0, 0.2, 1) 80ms;
     }
     .spotlight-card {
       width: min(86vw, 1080px);
@@ -143,7 +152,7 @@ HTML_PAGE = """<!doctype html>
       animation: spotlightEnter 520ms cubic-bezier(0.22, 1, 0.36, 1) forwards;
     }
     .spotlight.exit .spotlight-card {
-      animation: spotlightExit 420ms cubic-bezier(0.55, 0.06, 0.68, 0.19) forwards;
+      animation: spotlightExit 560ms cubic-bezier(0.4, 0, 0.2, 1) forwards;
     }
     @keyframes spotlightEnter {
       0% {
@@ -160,8 +169,11 @@ HTML_PAGE = """<!doctype html>
         transform: translateY(0) scale(1);
         opacity: 1;
       }
+      40% {
+        opacity: 0.95;
+      }
       100% {
-        transform: translateY(-10px) scale(0.88);
+        transform: translateY(12px) scale(0.93);
         opacity: 0;
       }
     }
@@ -196,19 +208,64 @@ HTML_PAGE = """<!doctype html>
     let settings = {
       animation_mode: "soft_zoom_fade",
       animation_intensity: "medio",
-      tile_interval_ms: 420,
+      tile_interval_ms: 360,
+      duplicate_fill: false,
+      mosaic_fullscreen: true,
+      tile_size_px: 120,
     };
     const renderedSet = new Set();
+    const srcToNode = new Map();
     const pendingQueue = [];
+    const pendingSet = new Set();
     let feederRunning = false;
     let feederTimer = null;
     let firstSyncDone = false;
+    let firstSyncPending = false;
+    let lastDupSig = "";
+    let prevDupFill = false;
+    let bulkAppendTimer = null;
+    let bulkAppendSig = "";
+    let resizeTimer = null;
+    let bulkAppendGen = 0;
+    const BULK_TILE_CHUNK = 40;
+    let lastMosaicFp = "";
+    let lastSettingsKey = "";
+
+    function applyGridLayout() {
+      const px = Math.max(64, Math.min(220, Number(settings.tile_size_px) || 120));
+      grid.style.setProperty("--tile-size", px + "px");
+      grid.classList.toggle("grid-fullscreen", !!settings.mosaic_fullscreen);
+    }
+
+    function computeTargetSlots() {
+      const style = getComputedStyle(grid);
+      let ts = parseFloat(style.getPropertyValue("--tile-size"));
+      if (!Number.isFinite(ts) || ts <= 0) ts = 120;
+      const w = grid.clientWidth || 0;
+      const h = grid.clientHeight || 0;
+      if (w <= 0 || h <= 0) return 0;
+      const cols = Math.max(1, Math.floor(w / ts));
+      const rows = Math.max(1, Math.floor(h / ts));
+      return cols * rows;
+    }
+
+    function expandToTarget(base, target) {
+      if (!base || !base.length || target <= 0) return [];
+      const out = [];
+      for (let i = 0; i < target; i++) {
+        const src = base[i % base.length];
+        const sep = src.includes("?") ? "&" : "?";
+        out.push(src + sep + "fill=" + i);
+      }
+      return out;
+    }
 
     function intensityProfile() {
+      /* spotlightExit = ms com o hero em destaque antes da animacao de volta ao mosaico */
       const map = {
-        suave: { entry: 280, spotlightShow: 1100, spotlightExit: 900 },
-        medio: { entry: 420, spotlightShow: 1700, spotlightExit: 1300 },
-        forte: { entry: 620, spotlightShow: 2300, spotlightExit: 1800 },
+        suave: { entry: 280, spotlightExit: 820 },
+        medio: { entry: 420, spotlightExit: 1320 },
+        forte: { entry: 620, spotlightExit: 1880 },
       };
       return map[settings.animation_intensity] || map.medio;
     }
@@ -225,6 +282,10 @@ HTML_PAGE = """<!doctype html>
 
     function showSpotlight(src) {
       const prof = intensityProfile();
+      const exitCardMs = 560;
+      const settleMs = 140;
+      const hideAt = prof.spotlightExit + exitCardMs + settleMs;
+
       if (spotlightTimer) { clearTimeout(spotlightTimer); spotlightTimer = null; }
       if (spotlightExitTimer) { clearTimeout(spotlightExitTimer); spotlightExitTimer = null; }
       spotlightImg.src = src;
@@ -237,14 +298,14 @@ HTML_PAGE = """<!doctype html>
       setTimeout(() => spotlight.classList.remove("enter"), 560);
       spotlightExitTimer = setTimeout(() => {
         spotlight.classList.add("exit");
+        grid.classList.remove("focused");
       }, prof.spotlightExit);
       spotlightTimer = setTimeout(() => {
         spotlight.classList.remove("exit");
         spotlight.classList.remove("show");
-        grid.classList.remove("focused");
         spotlightTimer = null;
         spotlightExitTimer = null;
-      }, prof.spotlightShow);
+      }, hideAt);
     }
 
     function shouldShowSpotlight() {
@@ -252,15 +313,16 @@ HTML_PAGE = """<!doctype html>
       return m === "hero_spotlight_pulse" || m === "soft_zoom_fade";
     }
 
-    function createTile(src, animated) {
+    function createTile(src, animated, lazyLoad) {
       const d = document.createElement("div");
       d.className = "tile" + (animated ? " anim-" + modeKey() : "");
       if (animated) {
         d.style.setProperty("--entry-ms", intensityProfile().entry + "ms");
       }
       const img = document.createElement("img");
-      img.loading = "lazy";
+      img.loading = lazyLoad ? "lazy" : "eager";
       img.decoding = "async";
+      if ("fetchPriority" in img) img.fetchPriority = lazyLoad ? "low" : "auto";
       img.src = src;
       d.appendChild(img);
       return d;
@@ -268,28 +330,62 @@ HTML_PAGE = """<!doctype html>
 
     function appendTile(src, animated) {
       if (renderedSet.has(src)) return;
-      grid.appendChild(createTile(src, animated));
+      const d = createTile(src, animated, false);
+      grid.appendChild(d);
       renderedSet.add(src);
+      srcToNode.set(src, d);
     }
 
-    function appendTilesInstant(images) {
-      // Render inicial: preserva a estrutura original sem animar nem enfileirar.
+    function appendTilesInstantChunk(images, start, lazyLoad) {
       const frag = document.createDocumentFragment();
-      for (const src of images) {
+      const end = Math.min(start + BULK_TILE_CHUNK, images.length);
+      for (let i = start; i < end; i++) {
+        const src = images[i];
         if (renderedSet.has(src)) continue;
-        frag.appendChild(createTile(src, false));
+        const d = createTile(src, false, lazyLoad);
+        frag.appendChild(d);
         renderedSet.add(src);
+        srcToNode.set(src, d);
       }
       grid.appendChild(frag);
+      return end;
+    }
+
+    function appendTilesInstant(images, onDone) {
+      bulkAppendGen += 1;
+      const myGen = bulkAppendGen;
+      const lazyLoad = images.length > 16;
+      if (images.length <= BULK_TILE_CHUNK) {
+        appendTilesInstantChunk(images, 0, lazyLoad);
+        if (typeof onDone === "function") onDone();
+        return;
+      }
+      let offset = 0;
+      function step() {
+        if (myGen !== bulkAppendGen) return;
+        offset = appendTilesInstantChunk(images, offset, lazyLoad);
+        if (offset < images.length) {
+          requestAnimationFrame(step);
+        } else if (typeof onDone === "function") {
+          onDone();
+        }
+      }
+      requestAnimationFrame(step);
     }
 
     function clearGrid() {
+      bulkAppendGen += 1;
       grid.innerHTML = "";
       renderedSet.clear();
+      srcToNode.clear();
       pendingQueue.length = 0;
+      pendingSet.clear();
       if (feederTimer) { clearTimeout(feederTimer); feederTimer = null; }
+      if (bulkAppendTimer) { clearTimeout(bulkAppendTimer); bulkAppendTimer = null; }
+      bulkAppendSig = "";
       feederRunning = false;
       firstSyncDone = false;
+      firstSyncPending = false;
     }
 
     function startFeederIfNeeded() {
@@ -303,30 +399,89 @@ HTML_PAGE = """<!doctype html>
       feederTimer = null;
       if (!pendingQueue.length) { feederRunning = false; return; }
       const src = pendingQueue.shift();
+      pendingSet.delete(src);
       appendTile(src, true);
       if (shouldShowSpotlight()) {
         showSpotlight(src);
       }
       if (!pendingQueue.length) { feederRunning = false; return; }
-      const wait = Math.max(80, Math.min(8000, settings.tile_interval_ms || 420));
+      const wait = Math.max(80, Math.min(8000, settings.tile_interval_ms || 360));
       feederTimer = setTimeout(feedStep, wait);
     }
 
     function syncQueueFromServer(images) {
-      // Lista do servidor diminuiu (limpar/reset) → reset total.
-      if (images.length < renderedSet.size) {
+      const dup = !!settings.duplicate_fill;
+      if (dup !== prevDupFill) {
+        prevDupFill = dup;
+        lastDupSig = "";
         clearGrid();
       }
-      // Render inicial (load da página): instantâneo, sem alterar disposição.
-      if (!firstSyncDone) {
-        appendTilesInstant(images);
-        firstSyncDone = true;
+
+      if (dup) {
+        const target = computeTargetSlots();
+        if (!images.length) {
+          if (lastDupSig !== "") {
+            clearGrid();
+            lastDupSig = "";
+          }
+          return;
+        }
+        if (target <= 0) return;
+        const display = expandToTarget(images, target);
+        const sig = display.length + "\0" + (display[0] || "") + "\0" + (display[display.length - 1] || "");
+        if (sig === lastDupSig) return;
+        if (bulkAppendTimer) { clearTimeout(bulkAppendTimer); bulkAppendTimer = null; }
+        clearGrid();
+        lastDupSig = sig;
+        firstSyncPending = true;
+        appendTilesInstant(display, () => {
+          firstSyncDone = true;
+          firstSyncPending = false;
+        });
         return;
       }
-      // A partir daqui, somente imagens novas entram com animação/intervalo.
+
+      lastDupSig = "";
+      if (!images.length) {
+        if (renderedSet.size) clearGrid();
+        return;
+      }
+      /* Evitar clearGrid() por lista mais curta (leitura transitoria): apagava pendingQueue e
+         estourava centenas de pastilhas de uma vez sem cadencia. Removemos so tiles obsoletos. */
+      if (images.length < renderedSet.size) {
+        const keep = new Set(images);
+        for (let i = pendingQueue.length - 1; i >= 0; i--) {
+          const q = pendingQueue[i];
+          if (!keep.has(q)) {
+            pendingSet.delete(q);
+            pendingQueue.splice(i, 1);
+          }
+        }
+        for (const s of Array.from(renderedSet)) {
+          if (!keep.has(s)) {
+            renderedSet.delete(s);
+            const node = srcToNode.get(s);
+            if (node) {
+              node.remove();
+              srcToNode.delete(s);
+            }
+          }
+        }
+      }
+      if (!firstSyncDone) {
+        if (firstSyncPending) return;
+        firstSyncPending = true;
+        appendTilesInstant(images, () => {
+          firstSyncDone = true;
+          firstSyncPending = false;
+          startFeederIfNeeded();
+        });
+        return;
+      }
       for (const src of images) {
-        if (!renderedSet.has(src) && !pendingQueue.includes(src)) {
+        if (!renderedSet.has(src) && !pendingSet.has(src)) {
           pendingQueue.push(src);
+          pendingSet.add(src);
         }
       }
       startFeederIfNeeded();
@@ -337,10 +492,24 @@ HTML_PAGE = """<!doctype html>
         const r = await fetch("/api/state", { cache: "no-store" });
         if (!r.ok) throw new Error("HTTP " + r.status);
         const data = await r.json();
-        if (data.settings) settings = Object.assign(settings, data.settings);
         const images = data.images || [];
-        known = images.slice();
-        syncQueueFromServer(images);
+        if (data.settings) settings = Object.assign(settings, data.settings);
+        applyGridLayout();
+        const gen = Number(data.mosaic_generation) || 0;
+        const settingsKey = [
+          settings.tile_size_px,
+          settings.duplicate_fill,
+          settings.mosaic_fullscreen,
+          settings.animation_mode,
+          settings.animation_intensity,
+        ].join("|");
+        const fp = gen + "|" + images.length + "|" + (images[0] || "") + "|" + (images[images.length - 1] || "");
+        if (fp !== lastMosaicFp || settingsKey !== lastSettingsKey) {
+          lastMosaicFp = fp;
+          lastSettingsKey = settingsKey;
+          known = images.slice();
+          syncQueueFromServer(images);
+        }
         const nextBg = data.background || "";
         if (nextBg !== bgCurrent) {
           bgCurrent = nextBg;
@@ -358,9 +527,21 @@ HTML_PAGE = """<!doctype html>
       if (src) showSpotlight(src);
     }
 
+    applyGridLayout();
     tick();
-    setInterval(tick, 1200);
+    /* ~0,8 s: resposta mais rapida; syncQueue evita trabalho quando o estado nao muda. */
+    setInterval(tick, 800);
     setInterval(cycleSpotlight, 10000);
+
+    window.addEventListener("resize", () => {
+      if (!settings.duplicate_fill) return;
+      clearTimeout(resizeTimer);
+      resizeTimer = setTimeout(() => {
+        lastDupSig = "";
+        lastMosaicFp = "";
+        tick();
+      }, 200);
+    });
 
     // Live reload: recarrega a aba quando o template HTML mudar no servidor.
     let __frontVersion = null;
@@ -378,7 +559,7 @@ HTML_PAGE = """<!doctype html>
         }
       } catch (e) {}
     }
-    setInterval(checkVersion, 1000);
+    setInterval(checkVersion, 2500);
   </script>
 </body>
 </html>
@@ -456,7 +637,17 @@ class _FrontendHandler(BaseHTTPRequestHandler):
                 self.send_error(404)
                 return
             ctype = mimetypes.guess_type(str(file_path))[0] or "application/octet-stream"
-            self._send_bytes(file_path.read_bytes(), ctype)
+            body = file_path.read_bytes()
+            self.send_response(200)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(len(body)))
+            stem = file_path.stem.lower()
+            if re.match(r"^img\d+$", stem):
+                self.send_header("Cache-Control", "public, max-age=604800, immutable")
+            else:
+                self.send_header("Cache-Control", "public, max-age=3600")
+            self.end_headers()
+            self.wfile.write(body)
             return
 
         if path == "/background":
@@ -465,7 +656,13 @@ class _FrontendHandler(BaseHTTPRequestHandler):
                 self.send_error(404)
                 return
             ctype = mimetypes.guess_type(str(bg))[0] or "application/octet-stream"
-            self._send_bytes(bg.read_bytes(), ctype)
+            body = bg.read_bytes()
+            self.send_response(200)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(len(body)))
+            self.send_header("Cache-Control", "public, max-age=600")
+            self.end_headers()
+            self.wfile.write(body)
             return
 
         self.send_error(404)
@@ -481,49 +678,107 @@ class SimpleMosaicFrontend:
         # Configs sincronizadas com a interface principal.
         self.animation_mode: str = "soft_zoom_fade"
         self.animation_intensity: str = "medio"
-        self.tile_interval_ms: int = 420
+        self.tile_interval_ms: int = 360
+        self.tile_size_px: int = 120
+        self.mosaic_fullscreen: bool = True
+        self.duplicate_fill: bool = False
 
         self._httpd: ThreadingHTTPServer | None = None
         self._thread: threading.Thread | None = None
         self._is_running = False
         self._opened_once = False
+        # Incrementado quando chega nova pastilha (injecao/monitor) para o cliente re-pollar.
+        self._mosaic_generation: int = 0
+        self._images_list_cache: list[str] | None = None
+        self._images_list_mtime: int | None = None
+        self._images_cache_gen: int = -1
 
     def update_settings(
         self,
         animation_mode: str | None = None,
         animation_intensity: str | None = None,
         tile_interval_ms: int | None = None,
+        tile_size_px: int | None = None,
+        mosaic_fullscreen: bool | None = None,
+        duplicate_fill: bool | None = None,
     ):
-        if animation_mode:
-            self.animation_mode = animation_mode.strip().lower()
-        if animation_intensity:
-            self.animation_intensity = animation_intensity.strip().lower()
+        if animation_mode is not None:
+            s = str(animation_mode).strip().lower()
+            if s:
+                self.animation_mode = s
+        if animation_intensity is not None:
+            s = str(animation_intensity).strip().lower()
+            if s:
+                self.animation_intensity = s
         if tile_interval_ms is not None:
             try:
                 self.tile_interval_ms = max(80, min(8000, int(tile_interval_ms)))
             except (TypeError, ValueError):
                 pass
+        if tile_size_px is not None:
+            try:
+                self.tile_size_px = max(64, min(220, int(tile_size_px)))
+            except (TypeError, ValueError):
+                pass
+        if mosaic_fullscreen is not None:
+            self.mosaic_fullscreen = bool(mosaic_fullscreen)
+        if duplicate_fill is not None:
+            self.duplicate_fill = bool(duplicate_fill)
 
-    def build_state(self) -> dict:
+    def notify_mosaic_changed(self) -> None:
+        """Chame apos cada nova imagem no MOSAIC para o cliente re-pollar."""
+        try:
+            self._mosaic_generation = int(self._mosaic_generation) + 1
+        except (TypeError, ValueError):
+            self._mosaic_generation = 1
+        self._images_list_cache = None
+        self._images_list_mtime = None
+
+    def _list_mosaic_image_urls(self) -> list[str]:
         exts = {".jpg", ".jpeg", ".png", ".bmp", ".webp", ".jfif"}
-        images = []
-        if self.mosaic_dir.exists():
-            def _order_key(path: Path):
-                m = re.match(r"^img(\d+)$", path.stem.lower())
-                if m:
-                    return (0, int(m.group(1)), path.name.lower())
-                return (1, 0, path.name.lower())
+        try:
+            mtime_ns = int(self.mosaic_dir.stat().st_mtime_ns)
+        except OSError:
+            mtime_ns = -1
 
+        if self._images_list_cache is not None:
+            if getattr(self, "_images_cache_gen", -1) != self._mosaic_generation:
+                pass
+            elif self._images_list_mtime == mtime_ns:
+                return self._images_list_cache
+
+        def _order_key(path: Path):
+            m = re.match(r"^img(\d+)$", path.stem.lower())
+            if m:
+                return (0, int(m.group(1)), path.name.lower())
+            return (1, 0, path.name.lower())
+
+        images: list[str] = []
+        try:
             for p in sorted(self.mosaic_dir.iterdir(), key=_order_key):
                 if p.is_file() and p.suffix.lower() in exts:
                     images.append(f"/mosaic/{p.name}")
+        except OSError:
+            images = []
+
+        self._images_list_cache = images
+        self._images_list_mtime = mtime_ns
+        self._images_cache_gen = int(self._mosaic_generation)
+        return images
+
+    def build_state(self) -> dict:
+        images = self._list_mosaic_image_urls()
         return {
             "images": images,
+            "mosaic_generation": int(self._mosaic_generation),
             "background": "/background" if self.background_path and self.background_path.exists() else None,
             "settings": {
                 "animation_mode": self.animation_mode,
                 "animation_intensity": self.animation_intensity,
                 "tile_interval_ms": self.tile_interval_ms,
+                "tile_size_px": self.tile_size_px,
+                "mosaic_fullscreen": self.mosaic_fullscreen,
+                "duplicate_fill": self.duplicate_fill,
             },
         }
 

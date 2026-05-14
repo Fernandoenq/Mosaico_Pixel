@@ -126,7 +126,7 @@ class LiveMosaicPanel:
             tile_rgba = tile_rgba.filter(ImageFilter.GaussianBlur(radius=blur_radius))
 
         scaled = max(1, int(self.cell_size * scale))
-        tile_rgba = tile_rgba.resize((scaled, scaled), Image.Resampling.LANCZOS)
+        tile_rgba = tile_rgba.resize((scaled, scaled), Image.Resampling.BICUBIC)
 
         frame = Image.new("RGBA", (self.cell_size, self.cell_size), (0, 0, 0, 0))
         offset = (self.cell_size - scaled) // 2
@@ -248,7 +248,7 @@ class LiveMosaicPanel:
 
     def _build_spotlight_rgba(self, tile_base: Image.Image, scale: float, blur_radius: float, glow_strength: float):
         base_size = max(1, int(self.cell_size * scale))
-        tile_rgba = tile_base.convert("RGBA").resize((base_size, base_size), Image.Resampling.LANCZOS)
+        tile_rgba = tile_base.convert("RGBA").resize((base_size, base_size), Image.Resampling.BICUBIC)
         if blur_radius > 0.01:
             tile_rgba = tile_rgba.filter(ImageFilter.GaussianBlur(radius=blur_radius))
 
@@ -506,7 +506,7 @@ class LiveMosaicPanel:
 
         index = self.cursor
         with Image.open(caminho) as img:
-            img = ImageOps.fit(img.convert("RGB"), (self.cell_size, self.cell_size), Image.Resampling.LANCZOS)
+            img = ImageOps.fit(img.convert("RGB"), (self.cell_size, self.cell_size), Image.Resampling.BICUBIC)
             self._tile_images[index] = img.copy()
 
         if self.animation_mode == "pure_fade_mosaic":
