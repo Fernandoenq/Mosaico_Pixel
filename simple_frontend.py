@@ -72,6 +72,8 @@ HTML_PAGE = """<!doctype html>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+  <meta http-equiv="Pragma" content="no-cache" />
+  <meta http-equiv="Expires" content="0" />
   <title>Mosaico Pic Brand - Front</title>
   <style>
     :root {
@@ -116,6 +118,9 @@ HTML_PAGE = """<!doctype html>
       object-position: center;
       filter: saturate(1.12) contrast(1.06) brightness(1.03);
     }
+    .bg.forming-from-tiles img {
+      display: none;
+    }
     .telao-shell.shell-fill {
       width: 100vw;
       height: 100dvh;
@@ -146,6 +151,7 @@ HTML_PAGE = """<!doctype html>
       transition: filter 380ms cubic-bezier(0.22, 1, 0.36, 1);
     }
     .tile {
+      position: relative;
       width: 100%;
       height: 100%;
       min-width: 0;
@@ -155,13 +161,27 @@ HTML_PAGE = """<!doctype html>
       box-sizing: border-box;
       border-radius: 0;
       overflow: hidden;
-      background: var(--card);
+      background: #1a1a22;
       border: none;
     }
-    .tile img {
+    .tile-bg-slice {
+      position: absolute;
+      inset: 0;
+      z-index: 0;
+      background-repeat: no-repeat;
+      filter: saturate(1.12) contrast(1.06) brightness(1.03);
+      opacity: 0;
+      transition: opacity 0.45s ease;
+    }
+    .tile.has-bg-slice .tile-bg-slice {
+      opacity: 1;
+    }
+    .tile-photo {
+      position: relative;
+      z-index: 1;
       width: 100%;
       height: 100%;
-      object-fit: contain;
+      object-fit: cover;
       object-position: center;
       image-rendering: auto;
       display: block;
@@ -169,33 +189,39 @@ HTML_PAGE = """<!doctype html>
       mix-blend-mode: normal;
       transition: opacity 0.55s ease;
     }
-    .tile.tile-waiting-spotlight img {
+    .tile.has-bg-slice .tile-photo {
+      opacity: 0.38;
+    }
+    .tile.tile-waiting-spotlight .tile-photo {
       opacity: 0;
     }
-    .tile.tile-in-mosaic img {
+    .tile.tile-in-mosaic:not(.has-bg-slice) .tile-photo {
       opacity: 0.42;
     }
-    .tile > img.anim-soft_zoom_fade,
-    .tile > img.anim-hero_spotlight_pulse {
+    .tile.tile-in-mosaic.has-bg-slice .tile-photo {
+      opacity: 0.38;
+    }
+    .tile > .tile-photo.anim-soft_zoom_fade,
+    .tile > .tile-photo.anim-hero_spotlight_pulse {
       animation: softZoomFadeIn var(--entry-ms, 420ms) cubic-bezier(0.22, 1, 0.36, 1) both;
     }
-    .tile > img.anim-staggered_grid_cascade {
+    .tile > .tile-photo.anim-staggered_grid_cascade {
       animation: cascadeIn var(--entry-ms, 420ms) cubic-bezier(0.22, 1, 0.36, 1) both;
     }
-    .tile > img.anim-pure_fade_mosaic {
+    .tile > .tile-photo.anim-pure_fade_mosaic {
       animation: pureFade var(--entry-ms, 420ms) ease both;
     }
     @keyframes softZoomFadeIn {
       0% { opacity: 0; }
-      100% { opacity: 0.42; }
+      100% { opacity: var(--tile-photo-opacity, 0.42); }
     }
     @keyframes cascadeIn {
       0% { opacity: 0; }
-      100% { opacity: 0.42; }
+      100% { opacity: var(--tile-photo-opacity, 0.42); }
     }
     @keyframes pureFade {
       0% { opacity: 0; }
-      100% { opacity: 0.42; }
+      100% { opacity: var(--tile-photo-opacity, 0.42); }
     }
     .spotlight {
       position: fixed;
@@ -318,11 +344,97 @@ HTML_PAGE = """<!doctype html>
     const BULK_TILE_CHUNK = 40;
     let lastMosaicFp = "";
     let lastMosaicGen = 0;
+    let lastBrowserFlush = 0;
     let lastSettingsKey = "";
     let layoutCols = 4;
     let layoutRows = 5;
     let layoutTilePx = 48;
     let lastLayoutSig = "";
+    let gridCursor = 0;
+    let bgFormingMode = false;
+    let bgNaturalW = 0;
+    let bgNaturalH = 0;
+
+    function maxGridCells() {
+      return Math.max(1, layoutCols * layoutRows);
+    }
+
+    function shellPixelSize() {
+      if (settings.mosaic_fullscreen) {
+        return {
+          w: window.innerWidth || 768,
+          h: window.innerHeight || 960,
+        };
+      }
+      return {
+        w: Math.max(320, Number(settings.mosaic_width) || 768),
+        h: Math.max(400, Number(settings.mosaic_height) || 960),
+      };
+    }
+
+    function containedBackgroundRect() {
+      const shell = shellPixelSize();
+      const w = shell.w;
+      const h = shell.h;
+      if (!bgNaturalW || !bgNaturalH) {
+        return { dw: w, dh: h, ox: 0, oy: 0 };
+      }
+      const scale = Math.min(w / bgNaturalW, h / bgNaturalH);
+      const dw = bgNaturalW * scale;
+      const dh = bgNaturalH * scale;
+      return { dw, dh, ox: (w - dw) * 0.5, oy: (h - dh) * 0.5 };
+    }
+
+    function applyBgSliceToTile(tileEl, cellIndex) {
+      if (!tileEl || !bgFormingMode || !bgCurrent) return;
+      const slice = tileEl.querySelector(".tile-bg-slice");
+      if (!slice) return;
+      const col = cellIndex % layoutCols;
+      const row = Math.floor(cellIndex / layoutCols);
+      const ts = layoutTilePx;
+      const x = col * ts;
+      const y = row * ts;
+      const rect = containedBackgroundRect();
+      slice.style.backgroundImage = "url(" + JSON.stringify(bgCurrent) + ")";
+      slice.style.backgroundSize = rect.dw + "px " + rect.dh + "px";
+      slice.style.backgroundPosition = (-(x - rect.ox)) + "px " + (-(y - rect.oy)) + "px";
+      tileEl.classList.add("has-bg-slice");
+    }
+
+    function refreshAllTileBgSlices() {
+      if (!bgFormingMode) return;
+      for (const node of srcToNode.values()) {
+        const idx = parseInt(node.dataset.cellIndex || "", 10);
+        if (!isNaN(idx)) applyBgSliceToTile(node, idx);
+      }
+    }
+
+    function syncBgFormingMode(hasBg) {
+      bgFormingMode = !!hasBg;
+      if (bg) {
+        bg.classList.toggle("forming-from-tiles", bgFormingMode);
+      }
+      if (!bgFormingMode) {
+        for (const node of srcToNode.values()) {
+          node.classList.remove("has-bg-slice");
+        }
+      } else {
+        refreshAllTileBgSlices();
+      }
+    }
+
+    function updateBgMetricsFromImage() {
+      if (!bgImg) return;
+      if (bgImg.naturalWidth > 0) {
+        bgNaturalW = bgImg.naturalWidth;
+        bgNaturalH = bgImg.naturalHeight;
+        refreshAllTileBgSlices();
+      }
+    }
+
+    if (bgImg) {
+      bgImg.addEventListener("load", updateBgMetricsFromImage);
+    }
 
     function applyGridLayout() {
       if (!telaoShell || !mosaicStage || !grid) return false;
@@ -369,10 +481,13 @@ HTML_PAGE = """<!doctype html>
         syncQueueFromServer(known.slice());
         return;
       }
-      const snap = known.slice();
+      const snap = sortImageUrls(known);
       clearGrid();
       firstSyncDone = true;
-      enqueueNewImages(snap);
+      for (let i = 0; i < snap.length; i++) {
+        appendTileAt(snap[i], false, i % maxGridCells());
+      }
+      gridCursor = snap.length;
     }
 
     function computeTargetSlots() {
@@ -468,7 +583,7 @@ HTML_PAGE = """<!doctype html>
         const key = mosaicTileKey(src);
         const node = srcToNode.get(key);
         if (!node) continue;
-        const img = node.querySelector("img");
+        const img = node.querySelector(".tile-photo");
         if (img && img.getAttribute("src") !== src) img.src = src;
       }
     }
@@ -629,10 +744,18 @@ HTML_PAGE = """<!doctype html>
       return added;
     }
 
-    function createTile(src, animated, lazyLoad) {
+    function createTile(src, animated, lazyLoad, cellIndex) {
       const d = document.createElement("div");
       d.className = "tile";
+      d.dataset.cellIndex = String(cellIndex);
+      d.style.setProperty("--tile-photo-opacity", bgFormingMode ? "0.38" : "0.42");
+
+      const slice = document.createElement("div");
+      slice.className = "tile-bg-slice";
+      slice.setAttribute("aria-hidden", "true");
+
       const img = document.createElement("img");
+      img.className = "tile-photo";
       const waitSpotlight = animated && shouldShowSpotlight();
       if (waitSpotlight) {
         d.classList.add("tile-waiting-spotlight");
@@ -651,17 +774,25 @@ HTML_PAGE = """<!doctype html>
       img.onerror = function() {
         this.style.background = "rgba(255,80,80,0.35)";
       };
+      d.appendChild(slice);
       d.appendChild(img);
+      applyBgSliceToTile(d, cellIndex);
       return d;
     }
 
-    function appendTile(src, animated) {
+    function appendTileAt(src, animated, cellIndex) {
       const key = mosaicTileKey(src);
       if (renderedSet.has(key)) return;
-      const d = createTile(src, animated, false);
+      const d = createTile(src, animated, false, cellIndex);
       grid.appendChild(d);
       renderedSet.add(key);
       srcToNode.set(key, d);
+    }
+
+    function appendTile(src, animated) {
+      const cellIndex = gridCursor % maxGridCells();
+      gridCursor += 1;
+      appendTileAt(src, animated, cellIndex);
     }
 
     function appendTilesInstantChunk(images, start, lazyLoad) {
@@ -671,12 +802,15 @@ HTML_PAGE = """<!doctype html>
         const src = images[i];
         const key = mosaicTileKey(src);
         if (renderedSet.has(key)) continue;
-        const d = createTile(src, false, lazyLoad);
+        const d = createTile(src, false, lazyLoad, i);
         frag.appendChild(d);
         renderedSet.add(key);
         srcToNode.set(key, d);
       }
       grid.appendChild(frag);
+      if (end >= images.length) {
+        gridCursor = Math.max(gridCursor, images.length);
+      }
       return end;
     }
 
@@ -718,6 +852,7 @@ HTML_PAGE = """<!doctype html>
       feederRunning = false;
       feederAwaitingSpotlight = false;
       cycleIndex = 0;
+      gridCursor = 0;
     }
 
     function startFeederIfNeeded() {
@@ -876,17 +1011,31 @@ HTML_PAGE = """<!doctype html>
         const bgUrl = nextBg
           ? nextBg + (nextBg.indexOf("?") >= 0 ? "&" : "?") + "t=" + gen
           : "";
+        if (typeof data.background_width === "number" && data.background_width > 0) {
+          bgNaturalW = data.background_width;
+        }
+        if (typeof data.background_height === "number" && data.background_height > 0) {
+          bgNaturalH = data.background_height;
+        }
         if (bgUrl !== bgCurrent) {
           bgCurrent = bgUrl;
+          syncBgFormingMode(!!bgUrl);
           if (bgImg) {
             if (bgUrl) {
               bgImg.src = bgUrl;
-              bgImg.style.display = "block";
+              bgImg.style.display = "none";
             } else {
               bgImg.removeAttribute("src");
               bgImg.style.display = "none";
+              bgNaturalW = 0;
+              bgNaturalH = 0;
             }
           }
+        } else {
+          syncBgFormingMode(!!bgCurrent);
+        }
+        if (bgFormingMode && bgNaturalW > 0) {
+          refreshAllTileBgSlices();
         }
       } catch (e) {
         console.error("Mosaico front tick:", e);
@@ -921,6 +1070,8 @@ HTML_PAGE = """<!doctype html>
         const layoutChanged = applyGridLayout();
         if (layoutChanged && firstSyncDone && known.length) {
           rebuildGridTiles();
+        } else if (layoutChanged && bgFormingMode) {
+          refreshAllTileBgSlices();
         } else if (settings.duplicate_fill) {
           lastDupSig = "";
           lastMosaicFp = "";
@@ -1151,12 +1302,27 @@ class SimpleMosaicFrontend:
         self._images_cache_gen = gen
         return images
 
+    def _background_dimensions(self) -> tuple[int, int] | None:
+        if self.background_path is None or not self.background_path.exists():
+            return None
+        try:
+            from PIL import Image
+
+            with Image.open(self.background_path) as im:
+                w, h = im.size
+                return int(w), int(h)
+        except Exception:
+            return None
+
     def build_state(self) -> dict:
         images = self._list_mosaic_image_urls()
+        bg_dims = self._background_dimensions()
         return {
             "images": images,
             "mosaic_generation": int(self._mosaic_generation),
             "background": "/background" if self.background_path and self.background_path.exists() else None,
+            "background_width": bg_dims[0] if bg_dims else None,
+            "background_height": bg_dims[1] if bg_dims else None,
             "settings": {
                 "animation_mode": self.animation_mode,
                 "animation_intensity": self.animation_intensity,
