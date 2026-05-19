@@ -18,6 +18,8 @@ from galeria_monitor import EXTENSOES_SUPORTADAS, injetar_ficheiros, monitorar_e
 from live_mosaic_panel import LiveMosaicPanel
 from simple_frontend import SimpleMosaicFrontend
 
+_PROJECT_DIR = Path(__file__).resolve().parent
+
 
 class GaleriaMonitorApp:
     def __init__(self):
@@ -45,7 +47,7 @@ class GaleriaMonitorApp:
         self.animacao_var = tk.StringVar(value="Soft Zoom Fade-In")
         self.intensidade_animacao_var = tk.StringVar(value="Medio")
         # Navegador / gravacao: pastilha maior = menos celulas (~100-150 em Full HD com ~120 px).
-        self.navegador_pastilha_px_var = tk.IntVar(value=120)
+        self.navegador_pastilha_px_var = tk.IntVar(value=48)
         self.navegador_grade_tela_cheia_var = tk.BooleanVar(value=True)
         # Desligado por defeito: composicao foto a foto; liga para grelha cheia no video.
         self.navegador_duplicar_grade_var = tk.BooleanVar(value=False)
@@ -350,12 +352,12 @@ class GaleriaMonitorApp:
         )
         ttk.Label(
             nav_row,
-            text="~120 px ~130-150 fotos visiveis em Full HD (menor = mais fotos).",
+            text="Padrao 48 px (~16 col. no telao); menor = mais fotos visiveis.",
             style="Hint.TLabel",
         ).grid(row=0, column=2, sticky="w")
         ttk.Checkbutton(
             card_direito,
-            text="Grelha em tela cheia no navegador",
+            text="Grelha em tela cheia (preenche o navegador)",
             variable=self.navegador_grade_tela_cheia_var,
             style="App.TCheckbutton",
         ).grid(row=4, column=0, sticky="w", pady=(6, 0))
@@ -500,7 +502,7 @@ class GaleriaMonitorApp:
                 animation_mode=self._animation_mode_key(self.animacao_var.get()),
                 animation_intensity=self.intensidade_animacao_var.get().strip().lower(),
                 tile_interval_ms=int(self.intervalo_mosaico_ms_var.get() or 360),
-                tile_size_px=max(64, min(220, int(self.navegador_pastilha_px_var.get() or 120))),
+                tile_size_px=max(28, min(96, int(self.navegador_pastilha_px_var.get() or 48))),
                 mosaic_fullscreen=bool(self.navegador_grade_tela_cheia_var.get()),
                 duplicate_fill=bool(self.navegador_duplicar_grade_var.get()),
             )
@@ -522,7 +524,7 @@ class GaleriaMonitorApp:
         animacao = self.animacao_var.get().strip() or "Soft Zoom Fade-In"
         intensidade = self.intensidade_animacao_var.get().strip() or "Medio"
         try:
-            nav_tile = max(64, min(220, int(self.navegador_pastilha_px_var.get() or 120)))
+            nav_tile = max(28, min(96, int(self.navegador_pastilha_px_var.get() or 48)))
         except (tk.TclError, ValueError):
             nav_tile = 120
         nav_full = "Sim" if self.navegador_grade_tela_cheia_var.get() else "Nao"
@@ -550,7 +552,7 @@ class GaleriaMonitorApp:
             f"- Grade estimada: {colunas} x {linhas} ({total} fotos)\n"
             f"- Intervalo entre fotos no painel: {intervalo_ms} ms\n"
             f"- Animacao: {animacao} ({intensidade})\n"
-            f"- Navegador: pastilha {nav_tile} px, tela cheia {nav_full}, duplicar grelha {nav_dup}\n"
+            f"- Navegador: telao 768x960 (4x5), pastilha {nav_tile} px, ajustar ecra {nav_full}, duplicar grelha {nav_dup}\n"
             f"- Fundo selecionado: {'Sim' if self.fundo_painel_var.get().strip() else 'Nao'}"
         )
         self.summary_var.set(resumo)
@@ -1097,20 +1099,21 @@ class GaleriaMonitorApp:
 
     def _limpar_mosaico(self):
         total_arquivos_removidos = 0
-        pasta_mosaic = Path.cwd() / "MOSAIC"
-        extensoes_imagem = {".jpg", ".jpeg", ".png", ".bmp", ".webp", ".jfif"}
+        falhas = 0
+        pasta_mosaic = _PROJECT_DIR / "MOSAIC"
+        pasta_mosaic.mkdir(parents=True, exist_ok=True)
 
-        if pasta_mosaic.exists() and pasta_mosaic.is_dir():
-            for caminho in pasta_mosaic.iterdir():
-                if caminho.is_file() and caminho.suffix.lower() in extensoes_imagem:
-                    try:
-                        caminho.unlink()
-                        total_arquivos_removidos += 1
-                    except Exception:
-                        # Se um arquivo estiver em uso, ignora e segue os demais.
-                        pass
+        for caminho in list(pasta_mosaic.iterdir()):
+            if not caminho.is_file():
+                continue
+            try:
+                caminho.unlink()
+                total_arquivos_removidos += 1
+            except Exception:
+                falhas += 1
 
         try:
+            self.web_frontend.reset_mosaic_catalog()
             self.web_frontend.notify_mosaic_changed()
         except Exception:
             pass
@@ -1118,9 +1121,10 @@ class GaleriaMonitorApp:
         try:
             if self.live_panel is not None:
                 self.live_panel.clear_tiles()
-            self.log_var.set(
-                f"Mosaico limpo. {total_arquivos_removidos} arquivo(s) removido(s) da pasta MOSAIC."
-            )
+            msg = f"Mosaico limpo. {total_arquivos_removidos} arquivo(s) removido(s) da pasta MOSAIC."
+            if falhas:
+                msg += f" ({falhas} nao removido(s).)"
+            self.log_var.set(msg)
             self.status_var.set("Status: Mosaico e pasta MOSAIC limpos")
         except Exception as exc:
             self.log_var.set(f"Falha ao limpar mosaico: {exc}")

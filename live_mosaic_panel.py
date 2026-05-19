@@ -8,6 +8,8 @@ from pathlib import Path
 import tkinter as tk
 from PIL import Image, ImageDraw, ImageFilter, ImageOps, ImageTk
 
+from image_orientation import normalize_for_display
+
 
 class LiveMosaicPanel:
     def __init__(
@@ -505,8 +507,12 @@ class LiveMosaicPanel:
             return
 
         index = self.cursor
-        with Image.open(caminho) as img:
-            img = ImageOps.fit(img.convert("RGB"), (self.cell_size, self.cell_size), Image.Resampling.BICUBIC)
+        with Image.open(caminho) as raw:
+            img = ImageOps.fit(
+                normalize_for_display(raw).convert("RGB"),
+                (self.cell_size, self.cell_size),
+                Image.Resampling.BICUBIC,
+            )
             self._tile_images[index] = img.copy()
 
         if self.animation_mode == "pure_fade_mosaic":

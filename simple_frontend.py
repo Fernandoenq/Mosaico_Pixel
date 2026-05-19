@@ -13,7 +13,57 @@ import threading
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import unquote, urlparse
+from urllib.parse import quote, unquote, urlparse
+
+from image_orientation import needs_mosaic_normalize, oriented_image_bytes
+
+_PROJECT_DIR = Path(__file__).resolve().parent
+_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".webp", ".jfif", ".gif"}
+
+
+def _is_image_file(path: Path) -> bool:
+    if not path.is_file():
+        return False
+    ext = path.suffix.lower()
+    if ext in _IMAGE_EXTENSIONS:
+        return True
+    if ext:
+        return False
+    try:
+        head = path.read_bytes()[:16]
+    except OSError:
+        return False
+    return (
+        head.startswith(b"\xff\xd8")
+        or head.startswith(b"\x89PNG\r\n\x1a\n")
+        or (len(head) >= 12 and head[:4] == b"RIFF" and head[8:12] == b"WEBP")
+        or head.startswith(b"BM")
+        or head.startswith(b"GIF8")
+    )
+
+
+def _guess_image_mime(data: bytes) -> str:
+    if data.startswith(b"\xff\xd8"):
+        return "image/jpeg"
+    if data.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if len(data) >= 12 and data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "image/webp"
+    if data.startswith(b"BM"):
+        return "image/bmp"
+    if data.startswith(b"GIF8"):
+        return "image/gif"
+    return "image/jpeg"
+
+
+# Telão P2.6 mm reto (INDOOR): 768×960 px, grelha 4×5, módulo 192×192 px (4:5)
+TELAO_LARGURA_PX = 768
+TELAO_ALTURA_PX = 960
+TELAO_MODULO_PX = 192
+TELAO_COLUNAS = 4
+TELAO_LINHAS = 5
+# Intervalo minimo entre destaques no centro (evita cortar animacao da foto anterior).
+TELAO_SPOTLIGHT_GAP_MS = 1500
 
 
 HTML_PAGE = """<!doctype html>
@@ -21,6 +71,7 @@ HTML_PAGE = """<!doctype html>
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
   <title>Mosaico Pic Brand - Front</title>
   <style>
     :root {
@@ -36,95 +87,127 @@ HTML_PAGE = """<!doctype html>
       height: 100vh;
       overflow: hidden;
     }
-    .bg {
-      position: fixed;
-      inset: 0;
-      background-size: cover;
-      background-position: center;
-      background-repeat: no-repeat;
-      z-index: -2;
-      /* Fundo Pic Brand visivel; filtros leves para nao travar a GPU */
-      filter: saturate(1.12) contrast(1.06) brightness(1.03);
-      transform: scale(1.02);
-      transform-origin: center center;
-    }
-    .grid {
-      --tile-size: 120px;
+    .telao-shell {
       position: fixed;
       top: 0;
       left: 0;
-      width: 100vw;
-      z-index: 2;
-      /* Faixa superior curta; com .grid-fullscreen cobre o ecra (video cliente). */
-      height: calc(var(--tile-size) * 6);
-      padding: 0;
-      display: flex;
-      flex-wrap: wrap;
-      align-content: flex-start;
-      justify-content: flex-start;
+      z-index: 10;
+      width: 768px;
+      height: 960px;
+      transform-origin: top left;
+      will-change: transform;
       overflow: hidden;
     }
-    .grid.grid-fullscreen {
-      height: 100vh;
+    .bg {
+      position: absolute;
+      inset: 0;
+      z-index: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background-color: var(--bg);
+      pointer-events: none;
+    }
+    .bg img {
+      display: block;
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      object-position: center;
+      filter: saturate(1.12) contrast(1.06) brightness(1.03);
+    }
+    .telao-shell.shell-fill {
+      width: 100vw;
       height: 100dvh;
+      transform: none !important;
+    }
+    .mosaic-stage {
+      position: absolute;
+      inset: 0;
+      z-index: 2;
+      overflow: hidden;
+    }
+    .grid {
+      --tile-size: 48px;
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      padding: 0;
+      margin: 0;
+      display: grid;
+      gap: 0;
+      align-content: start;
+      justify-content: start;
+      overflow: hidden;
     }
     .grid.focused {
       filter: blur(2px) brightness(0.78);
       transition: filter 380ms cubic-bezier(0.22, 1, 0.36, 1);
     }
     .tile {
-      width: var(--tile-size);
-      height: var(--tile-size);
-      flex: 0 0 var(--tile-size);
+      width: 100%;
+      height: 100%;
+      min-width: 0;
+      min-height: 0;
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
       border-radius: 0;
       overflow: hidden;
       background: var(--card);
       border: none;
-      animation-fill-mode: backwards;
     }
     .tile img {
       width: 100%;
       height: 100%;
-      object-fit: cover;
+      object-fit: contain;
+      object-position: center;
       image-rendering: auto;
       display: block;
-      /* Mais transparente sobre o fundo Pic Brand; sem multiply (evita tom esverdeado). */
-      opacity: 0.48;
+      opacity: 0.42;
       mix-blend-mode: normal;
-      transition: opacity 0.35s ease;
+      transition: opacity 0.55s ease;
     }
-    .tile.anim-soft_zoom_fade {
+    .tile.tile-waiting-spotlight img {
+      opacity: 0;
+    }
+    .tile.tile-in-mosaic img {
+      opacity: 0.42;
+    }
+    .tile > img.anim-soft_zoom_fade,
+    .tile > img.anim-hero_spotlight_pulse {
       animation: softZoomFadeIn var(--entry-ms, 420ms) cubic-bezier(0.22, 1, 0.36, 1) both;
     }
-    .tile.anim-hero_spotlight_pulse {
-      animation: softZoomFadeIn var(--entry-ms, 420ms) cubic-bezier(0.22, 1, 0.36, 1) both;
-    }
-    .tile.anim-staggered_grid_cascade {
+    .tile > img.anim-staggered_grid_cascade {
       animation: cascadeIn var(--entry-ms, 420ms) cubic-bezier(0.22, 1, 0.36, 1) both;
     }
-    .tile.anim-pure_fade_mosaic {
+    .tile > img.anim-pure_fade_mosaic {
       animation: pureFade var(--entry-ms, 420ms) ease both;
     }
     @keyframes softZoomFadeIn {
-      0% { transform: scale(0.86); opacity: 0; }
-      100% { transform: scale(1); opacity: 1; }
+      0% { opacity: 0; }
+      100% { opacity: 0.42; }
     }
     @keyframes cascadeIn {
-      0% { transform: translateY(-10px); opacity: 0; }
-      100% { transform: translateY(0); opacity: 1; }
+      0% { opacity: 0; }
+      100% { opacity: 0.42; }
     }
     @keyframes pureFade {
       0% { opacity: 0; }
-      100% { opacity: 1; }
+      100% { opacity: 0.42; }
     }
     .spotlight {
       position: fixed;
       inset: 0;
-      z-index: 3;
-      display: grid;
-      place-items: center;
+      z-index: 25;
+      display: flex;
+      align-items: center;
+      justify-content: center;
       pointer-events: none;
       opacity: 0;
+      line-height: 0;
+      font-size: 0;
       transition: opacity 260ms cubic-bezier(0.22, 1, 0.36, 1);
     }
     .spotlight.show {
@@ -134,69 +217,61 @@ HTML_PAGE = """<!doctype html>
       opacity: 0;
       transition: opacity 340ms cubic-bezier(0.4, 0, 0.2, 1) 80ms;
     }
-    .spotlight-card {
-      width: min(86vw, 1080px);
-      height: min(92vh, 1280px);
-      max-width: 96vw;
-      max-height: 94vh;
-      aspect-ratio: auto;
-      border-radius: 20px;
-      overflow: hidden;
-      border: 1px solid rgba(255, 255, 255, 0.28);
-      box-shadow: 0 0 60px rgba(255, 255, 255, 0.2);
-      background: transparent;
-      transform-origin: center center;
-      will-change: transform, opacity;
-    }
-    .spotlight.enter .spotlight-card {
+    .spotlight.enter #spotlightImg {
       animation: spotlightEnter 520ms cubic-bezier(0.22, 1, 0.36, 1) forwards;
     }
-    .spotlight.exit .spotlight-card {
+    .spotlight.exit #spotlightImg {
       animation: spotlightExit 560ms cubic-bezier(0.4, 0, 0.2, 1) forwards;
     }
     @keyframes spotlightEnter {
-      0% {
-        transform: translateY(20px) scale(0.85);
-        opacity: 0;
-      }
-      100% {
-        transform: translateY(0) scale(1);
-        opacity: 1;
-      }
+      0% { opacity: 0; }
+      100% { opacity: 1; }
     }
     @keyframes spotlightExit {
-      0% {
-        transform: translateY(0) scale(1);
-        opacity: 1;
-      }
-      40% {
-        opacity: 0.95;
-      }
-      100% {
-        transform: translateY(12px) scale(0.93);
-        opacity: 0;
-      }
+      0% { opacity: 1; }
+      100% { opacity: 0; }
     }
-    .spotlight-card img {
-      width: 100%;
-      height: 100%;
-      object-fit: contain;
+    #spotlightImg {
       display: block;
+      margin: 0;
+      padding: 0;
+      border: none;
+      outline: none;
+      width: 0;
+      height: 0;
+      max-width: min(58vw, 560px);
+      max-height: min(72vh, 680px);
+      object-fit: contain;
+      border-radius: 12px;
+      box-shadow:
+        0 0 0 2px rgba(255, 255, 255, 0.35),
+        0 12px 80px rgba(0, 0, 0, 0.55);
+      background: transparent;
+      opacity: 0;
+      transform-origin: center center;
+    }
+    #spotlightImg.spotlight-ready {
+      opacity: 1;
     }
   </style>
 </head>
 <body>
-  <div class="bg" id="bg"></div>
-  <div class="grid" id="grid"></div>
-  <div class="spotlight" id="spotlight">
-    <div class="spotlight-card">
-      <img id="spotlightImg" alt="Nova imagem" />
+  <div class="telao-shell" id="telaoShell">
+    <div class="bg" id="bg"><img id="bgImg" alt="" /></div>
+    <div class="mosaic-stage" id="mosaicStage">
+      <div class="grid" id="grid"></div>
     </div>
+  </div>
+  <div class="spotlight" id="spotlight">
+    <img id="spotlightImg" alt="Nova imagem" />
   </div>
 
   <script>
     const grid = document.getElementById("grid");
+    const telaoShell = document.getElementById("telaoShell");
+    const mosaicStage = document.getElementById("mosaicStage");
     const bg = document.getElementById("bg");
+    const bgImg = document.getElementById("bgImg");
     const spotlight = document.getElementById("spotlight");
     const spotlightImg = document.getElementById("spotlightImg");
     let known = [];
@@ -204,20 +279,33 @@ HTML_PAGE = """<!doctype html>
     let spotlightTimer = null;
     let spotlightExitTimer = null;
     let cycleIndex = 0;
+    let spotlightProbe = null;
+    let spotlightQueue = [];
+    let spotlightActive = false;
+    let spotlightBusyUntil = 0;
+    let spotlightPumpTimer = null;
+    let currentSpotlightSrc = null;
+    const SPOTLIGHT_GAP_MS_DEFAULT = 1500;
 
     let settings = {
       animation_mode: "soft_zoom_fade",
       animation_intensity: "medio",
       tile_interval_ms: 360,
+      spotlight_min_gap_ms: 1500,
       duplicate_fill: false,
       mosaic_fullscreen: true,
-      tile_size_px: 120,
+      tile_size_px: 48,
+      mosaic_width: 768,
+      mosaic_height: 960,
+      mosaic_cols: 4,
+      mosaic_rows: 5,
     };
     const renderedSet = new Set();
     const srcToNode = new Map();
     const pendingQueue = [];
     const pendingSet = new Set();
     let feederRunning = false;
+    let feederAwaitingSpotlight = false;
     let feederTimer = null;
     let firstSyncDone = false;
     let firstSyncPending = false;
@@ -229,24 +317,66 @@ HTML_PAGE = """<!doctype html>
     let bulkAppendGen = 0;
     const BULK_TILE_CHUNK = 40;
     let lastMosaicFp = "";
+    let lastMosaicGen = 0;
     let lastSettingsKey = "";
+    let layoutCols = 4;
+    let layoutRows = 5;
+    let layoutTilePx = 48;
+    let lastLayoutSig = "";
 
     function applyGridLayout() {
-      const px = Math.max(64, Math.min(220, Number(settings.tile_size_px) || 120));
-      grid.style.setProperty("--tile-size", px + "px");
-      grid.classList.toggle("grid-fullscreen", !!settings.mosaic_fullscreen);
+      if (!telaoShell || !mosaicStage || !grid) return false;
+      const vw = window.innerWidth || 768;
+      const vh = window.innerHeight || 960;
+      const hint = Math.max(28, Math.min(96, Number(settings.tile_size_px) || 48));
+
+      let ts;
+      if (settings.mosaic_fullscreen) {
+        telaoShell.classList.add("shell-fill");
+        telaoShell.style.width = vw + "px";
+        telaoShell.style.height = vh + "px";
+        telaoShell.style.transform = "none";
+        layoutCols = Math.max(1, Math.floor(vw / hint));
+        ts = Math.max(28, Math.floor(vw / layoutCols));
+        layoutRows = Math.max(1, Math.floor(vh / ts));
+      } else {
+        telaoShell.classList.remove("shell-fill");
+        const fw = Math.max(320, Number(settings.mosaic_width) || 768);
+        const fh = Math.max(400, Number(settings.mosaic_height) || 960);
+        layoutCols = Math.max(1, Number(settings.mosaic_cols) || 4);
+        layoutRows = Math.max(1, Number(settings.mosaic_rows) || 5);
+        telaoShell.style.width = fw + "px";
+        telaoShell.style.height = fh + "px";
+        const scale = Math.min(vw / fw, vh / fh, 1);
+        telaoShell.style.transform = "scale(" + scale + ")";
+        ts = Math.max(28, Math.floor(Math.min(fw / layoutCols, fh / layoutRows)));
+      }
+
+      layoutTilePx = ts;
+      const sig = layoutCols + "x" + ts;
+      const changed = sig !== lastLayoutSig;
+      lastLayoutSig = sig;
+      grid.style.setProperty("--tile-size", ts + "px");
+      grid.style.gridTemplateColumns = "repeat(" + layoutCols + ", " + ts + "px)";
+      grid.style.gridAutoRows = ts + "px";
+      return changed;
+    }
+
+    function rebuildGridTiles() {
+      if (!known.length) return;
+      if (settings.duplicate_fill) {
+        lastDupSig = "";
+        syncQueueFromServer(known.slice());
+        return;
+      }
+      const snap = known.slice();
+      clearGrid();
+      firstSyncDone = true;
+      enqueueNewImages(snap);
     }
 
     function computeTargetSlots() {
-      const style = getComputedStyle(grid);
-      let ts = parseFloat(style.getPropertyValue("--tile-size"));
-      if (!Number.isFinite(ts) || ts <= 0) ts = 120;
-      const w = grid.clientWidth || 0;
-      const h = grid.clientHeight || 0;
-      if (w <= 0 || h <= 0) return 0;
-      const cols = Math.max(1, Math.floor(w / ts));
-      const rows = Math.max(1, Math.floor(h / ts));
-      return cols * rows;
+      return Math.max(1, layoutCols * layoutRows);
     }
 
     function expandToTarget(base, target) {
@@ -280,15 +410,116 @@ HTML_PAGE = """<!doctype html>
       return allowed.has(settings.animation_mode) ? settings.animation_mode : "soft_zoom_fade";
     }
 
-    function showSpotlight(src) {
+    function imageOrderKey(src) {
+      if (!src) return 1e12;
+      const m = mosaicTileKey(src).match(/img(\\d+)(?:\\.|$)/i);
+      if (m) return parseInt(m[1], 10);
+      return 1e11;
+    }
+
+    function sortImageUrls(urls) {
+      return urls.slice().sort(function(a, b) {
+        const ka = imageOrderKey(a);
+        const kb = imageOrderKey(b);
+        if (ka !== kb) return ka - kb;
+        return String(a).localeCompare(String(b));
+      });
+    }
+
+    function sortPendingQueue() {
+      pendingQueue.sort(function(a, b) {
+        return imageOrderKey(a) - imageOrderKey(b);
+      });
+    }
+
+    function spotlightPipelineBusy() {
+      return spotlightActive || spotlightQueue.length > 0 || Date.now() < spotlightBusyUntil;
+    }
+
+    function spotlightCycleMs() {
+      const prof = intensityProfile();
+      return prof.spotlightExit + 560 + 140 + spotlightGapMs();
+    }
+
+    function continueFeederAfterSpotlight() {
+      if (!feederAwaitingSpotlight) return;
+      feederAwaitingSpotlight = false;
+      if (!pendingQueue.length) {
+        feederRunning = false;
+        return;
+      }
+      feederTimer = setTimeout(feedStep, spotlightGapMs());
+    }
+
+    function mosaicTileKey(url) {
+      if (!url) return "";
+      const s = String(url);
+      if (settings.duplicate_fill && /[?&]fill=/.test(s)) return s;
+      const q = s.indexOf("?");
+      return q >= 0 ? s.slice(0, q) : s;
+    }
+
+    function spotlightSrc(url) {
+      return mosaicTileKey(url);
+    }
+
+    function refreshTileImageUrls(images) {
+      for (const src of images) {
+        const key = mosaicTileKey(src);
+        const node = srcToNode.get(key);
+        if (!node) continue;
+        const img = node.querySelector("img");
+        if (img && img.getAttribute("src") !== src) img.src = src;
+      }
+    }
+
+    function fitSpotlightSize(naturalW, naturalH) {
+      const maxW = Math.min(window.innerWidth * 0.58, 560);
+      const maxH = Math.min(window.innerHeight * 0.72, 680);
+      let w = Math.max(1, naturalW);
+      let h = Math.max(1, naturalH);
+      const scale = Math.min(1, maxW / w, maxH / h);
+      w = Math.round(w * scale);
+      h = Math.round(h * scale);
+      spotlightImg.style.width = w + "px";
+      spotlightImg.style.height = h + "px";
+    }
+
+    function spotlightGapMs() {
+      return Math.max(
+        SPOTLIGHT_GAP_MS_DEFAULT,
+        Number(settings.spotlight_min_gap_ms) || SPOTLIGHT_GAP_MS_DEFAULT
+      );
+    }
+
+    function setTileInMosaic(src) {
+      const node = srcToNode.get(mosaicTileKey(src));
+      if (!node) return;
+      node.classList.remove("tile-waiting-spotlight");
+      node.classList.add("tile-in-mosaic");
+    }
+
+    function finishSpotlightCycle() {
+      if (currentSpotlightSrc) {
+        setTileInMosaic(currentSpotlightSrc);
+        currentSpotlightSrc = null;
+      }
+      spotlightActive = false;
+      spotlightTimer = null;
+      spotlightExitTimer = null;
+      spotlightBusyUntil = Date.now() + spotlightGapMs();
+      pumpSpotlightQueue();
+      continueFeederAfterSpotlight();
+    }
+
+    function revealSpotlightUI() {
       const prof = intensityProfile();
       const exitCardMs = 560;
       const settleMs = 140;
       const hideAt = prof.spotlightExit + exitCardMs + settleMs;
 
-      if (spotlightTimer) { clearTimeout(spotlightTimer); spotlightTimer = null; }
-      if (spotlightExitTimer) { clearTimeout(spotlightExitTimer); spotlightExitTimer = null; }
-      spotlightImg.src = src;
+      spotlightActive = true;
+      spotlightImg.classList.add("spotlight-ready");
       spotlight.classList.remove("exit");
       spotlight.classList.remove("enter");
       spotlight.classList.add("show");
@@ -298,42 +529,139 @@ HTML_PAGE = """<!doctype html>
       setTimeout(() => spotlight.classList.remove("enter"), 560);
       spotlightExitTimer = setTimeout(() => {
         spotlight.classList.add("exit");
+        spotlightImg.classList.remove("spotlight-ready");
         grid.classList.remove("focused");
       }, prof.spotlightExit);
       spotlightTimer = setTimeout(() => {
         spotlight.classList.remove("exit");
         spotlight.classList.remove("show");
-        spotlightTimer = null;
-        spotlightExitTimer = null;
+        spotlightImg.removeAttribute("src");
+        spotlightImg.style.width = "0";
+        spotlightImg.style.height = "0";
+        spotlightImg.classList.remove("spotlight-ready");
+        finishSpotlightCycle();
       }, hideAt);
+    }
+
+    function pumpSpotlightQueue() {
+      if (spotlightPumpTimer) {
+        clearTimeout(spotlightPumpTimer);
+        spotlightPumpTimer = null;
+      }
+      if (!spotlightQueue.length) return;
+      if (spotlightActive) return;
+      const now = Date.now();
+      if (now < spotlightBusyUntil) {
+        spotlightPumpTimer = setTimeout(pumpSpotlightQueue, spotlightBusyUntil - now + 20);
+        return;
+      }
+      const src = spotlightQueue.shift();
+      if (src) showSpotlightNow(src);
+    }
+
+    function scheduleSpotlight(src) {
+      if (!shouldShowSpotlight() || !src) return;
+      spotlightQueue.push(src);
+      pumpSpotlightQueue();
+    }
+
+    function showSpotlightNow(src) {
+      const url = spotlightSrc(src);
+      if (!url || !spotlightImg || spotlightActive) {
+        if (src) spotlightQueue.unshift(src);
+        return;
+      }
+
+      currentSpotlightSrc = src;
+      spotlightProbe = null;
+      spotlightImg.classList.remove("spotlight-ready");
+      spotlightImg.style.opacity = "0";
+      spotlightImg.removeAttribute("src");
+      spotlightImg.style.width = "0";
+      spotlightImg.style.height = "0";
+
+      const probe = new Image();
+      spotlightProbe = probe;
+      probe.onload = function() {
+        if (spotlightProbe !== probe) return;
+        fitSpotlightSize(probe.naturalWidth, probe.naturalHeight);
+        spotlightImg.src = url;
+        spotlightImg.style.opacity = "1";
+        revealSpotlightUI();
+      };
+      probe.onerror = function() {
+        if (spotlightProbe !== probe) return;
+        spotlightImg.src = url;
+        spotlightImg.style.width = "";
+        spotlightImg.style.height = "";
+        spotlightImg.style.maxWidth = "min(58vw, 560px)";
+        spotlightImg.style.maxHeight = "min(72vh, 680px)";
+        spotlightImg.style.opacity = "1";
+        revealSpotlightUI();
+      };
+      probe.src = url;
+    }
+
+    function showSpotlight(src) {
+      scheduleSpotlight(src);
     }
 
     function shouldShowSpotlight() {
       const m = modeKey();
-      return m === "hero_spotlight_pulse" || m === "soft_zoom_fade";
+      return m === "soft_zoom_fade" || m === "hero_spotlight_pulse" || m === "staggered_grid_cascade";
+    }
+
+    function enqueueNewImages(images) {
+      let added = 0;
+      const ordered = sortImageUrls(images);
+      for (const src of ordered) {
+        const key = mosaicTileKey(src);
+        if (!renderedSet.has(key) && !pendingSet.has(key)) {
+          pendingQueue.push(src);
+          pendingSet.add(key);
+          added += 1;
+        }
+      }
+      if (added) {
+        sortPendingQueue();
+        startFeederIfNeeded();
+      }
+      return added;
     }
 
     function createTile(src, animated, lazyLoad) {
       const d = document.createElement("div");
-      d.className = "tile" + (animated ? " anim-" + modeKey() : "");
-      if (animated) {
-        d.style.setProperty("--entry-ms", intensityProfile().entry + "ms");
-      }
+      d.className = "tile";
       const img = document.createElement("img");
+      const waitSpotlight = animated && shouldShowSpotlight();
+      if (waitSpotlight) {
+        d.classList.add("tile-waiting-spotlight");
+      } else {
+        d.classList.add("tile-in-mosaic");
+        if (animated) {
+          img.classList.add("anim-" + modeKey());
+          img.style.setProperty("--entry-ms", intensityProfile().entry + "ms");
+        }
+      }
       img.loading = lazyLoad ? "lazy" : "eager";
       img.decoding = "async";
       if ("fetchPriority" in img) img.fetchPriority = lazyLoad ? "low" : "auto";
+      img.alt = "";
       img.src = src;
+      img.onerror = function() {
+        this.style.background = "rgba(255,80,80,0.35)";
+      };
       d.appendChild(img);
       return d;
     }
 
     function appendTile(src, animated) {
-      if (renderedSet.has(src)) return;
+      const key = mosaicTileKey(src);
+      if (renderedSet.has(key)) return;
       const d = createTile(src, animated, false);
       grid.appendChild(d);
-      renderedSet.add(src);
-      srcToNode.set(src, d);
+      renderedSet.add(key);
+      srcToNode.set(key, d);
     }
 
     function appendTilesInstantChunk(images, start, lazyLoad) {
@@ -341,11 +669,12 @@ HTML_PAGE = """<!doctype html>
       const end = Math.min(start + BULK_TILE_CHUNK, images.length);
       for (let i = start; i < end; i++) {
         const src = images[i];
-        if (renderedSet.has(src)) continue;
+        const key = mosaicTileKey(src);
+        if (renderedSet.has(key)) continue;
         const d = createTile(src, false, lazyLoad);
         frag.appendChild(d);
-        renderedSet.add(src);
-        srcToNode.set(src, d);
+        renderedSet.add(key);
+        srcToNode.set(key, d);
       }
       grid.appendChild(frag);
       return end;
@@ -362,7 +691,10 @@ HTML_PAGE = """<!doctype html>
       }
       let offset = 0;
       function step() {
-        if (myGen !== bulkAppendGen) return;
+        if (myGen !== bulkAppendGen) {
+          firstSyncPending = false;
+          return;
+        }
         offset = appendTilesInstantChunk(images, offset, lazyLoad);
         if (offset < images.length) {
           requestAnimationFrame(step);
@@ -384,8 +716,8 @@ HTML_PAGE = """<!doctype html>
       if (bulkAppendTimer) { clearTimeout(bulkAppendTimer); bulkAppendTimer = null; }
       bulkAppendSig = "";
       feederRunning = false;
-      firstSyncDone = false;
-      firstSyncPending = false;
+      feederAwaitingSpotlight = false;
+      cycleIndex = 0;
     }
 
     function startFeederIfNeeded() {
@@ -397,16 +729,31 @@ HTML_PAGE = """<!doctype html>
 
     function feedStep() {
       feederTimer = null;
-      if (!pendingQueue.length) { feederRunning = false; return; }
+      if (spotlightPipelineBusy()) {
+        feederTimer = setTimeout(feedStep, 220);
+        return;
+      }
+      if (!pendingQueue.length) {
+        feederRunning = false;
+        feederAwaitingSpotlight = false;
+        return;
+      }
+      sortPendingQueue();
       const src = pendingQueue.shift();
-      pendingSet.delete(src);
+      pendingSet.delete(mosaicTileKey(src));
       appendTile(src, true);
       if (shouldShowSpotlight()) {
-        showSpotlight(src);
+        feederAwaitingSpotlight = true;
+        scheduleSpotlight(src);
+        return;
       }
-      if (!pendingQueue.length) { feederRunning = false; return; }
-      const wait = Math.max(80, Math.min(8000, settings.tile_interval_ms || 360));
-      feederTimer = setTimeout(feedStep, wait);
+      setTileInMosaic(src);
+      if (!pendingQueue.length) {
+        feederRunning = false;
+        return;
+      }
+      const tileMs = Math.max(200, Math.min(8000, Number(settings.tile_interval_ms) || 360));
+      feederTimer = setTimeout(feedStep, tileMs);
     }
 
     function syncQueueFromServer(images) {
@@ -437,6 +784,8 @@ HTML_PAGE = """<!doctype html>
         appendTilesInstant(display, () => {
           firstSyncDone = true;
           firstSyncPending = false;
+          const last = display[display.length - 1];
+          if (last && shouldShowSpotlight()) scheduleSpotlight(last);
         });
         return;
       }
@@ -449,42 +798,32 @@ HTML_PAGE = """<!doctype html>
       /* Evitar clearGrid() por lista mais curta (leitura transitoria): apagava pendingQueue e
          estourava centenas de pastilhas de uma vez sem cadencia. Removemos so tiles obsoletos. */
       if (images.length < renderedSet.size) {
-        const keep = new Set(images);
+        const keepKeys = new Set(images.map(mosaicTileKey));
         for (let i = pendingQueue.length - 1; i >= 0; i--) {
           const q = pendingQueue[i];
-          if (!keep.has(q)) {
-            pendingSet.delete(q);
+          if (!keepKeys.has(mosaicTileKey(q))) {
+            pendingSet.delete(mosaicTileKey(q));
             pendingQueue.splice(i, 1);
           }
         }
-        for (const s of Array.from(renderedSet)) {
-          if (!keep.has(s)) {
-            renderedSet.delete(s);
-            const node = srcToNode.get(s);
+        for (const key of Array.from(renderedSet)) {
+          if (!keepKeys.has(key)) {
+            renderedSet.delete(key);
+            const node = srcToNode.get(key);
             if (node) {
               node.remove();
-              srcToNode.delete(s);
+              srcToNode.delete(key);
             }
           }
         }
       }
       if (!firstSyncDone) {
         if (firstSyncPending) return;
-        firstSyncPending = true;
-        appendTilesInstant(images, () => {
-          firstSyncDone = true;
-          firstSyncPending = false;
-          startFeederIfNeeded();
-        });
+        firstSyncDone = true;
+        enqueueNewImages(images);
         return;
       }
-      for (const src of images) {
-        if (!renderedSet.has(src) && !pendingSet.has(src)) {
-          pendingQueue.push(src);
-          pendingSet.add(src);
-        }
-      }
-      startFeederIfNeeded();
+      enqueueNewImages(images);
     }
 
     async function tick() {
@@ -494,72 +833,103 @@ HTML_PAGE = """<!doctype html>
         const data = await r.json();
         const images = data.images || [];
         if (data.settings) settings = Object.assign(settings, data.settings);
-        applyGridLayout();
+        const layoutChanged = applyGridLayout();
         const gen = Number(data.mosaic_generation) || 0;
         const settingsKey = [
           settings.tile_size_px,
+          settings.spotlight_min_gap_ms,
           settings.duplicate_fill,
           settings.mosaic_fullscreen,
+          settings.mosaic_width,
+          settings.mosaic_height,
+          settings.mosaic_cols,
+          settings.mosaic_rows,
           settings.animation_mode,
           settings.animation_intensity,
         ].join("|");
-        const fp = gen + "|" + images.length + "|" + (images[0] || "") + "|" + (images[images.length - 1] || "");
-        if (fp !== lastMosaicFp || settingsKey !== lastSettingsKey) {
+        const sorted = sortImageUrls(images);
+        const listKey = sorted.map(mosaicTileKey).join("\\0");
+        const fp = listKey;
+        const needsSync = fp !== lastMosaicFp || settingsKey !== lastSettingsKey;
+        if (needsSync) {
           lastMosaicFp = fp;
           lastSettingsKey = settingsKey;
-          known = images.slice();
-          syncQueueFromServer(images);
+          lastMosaicGen = gen;
+          known = sorted;
+          syncQueueFromServer(known);
+        } else if (gen !== lastMosaicGen) {
+          lastMosaicGen = gen;
+          known = sorted;
+          refreshTileImageUrls(known);
+        } else if (layoutChanged && firstSyncDone && known.length) {
+          rebuildGridTiles();
+        } else if (
+          images.length > 0 &&
+          renderedSet.size === 0 &&
+          !feederRunning &&
+          !firstSyncPending
+        ) {
+          known = sortImageUrls(images);
+          syncQueueFromServer(known);
         }
         const nextBg = data.background || "";
-        if (nextBg !== bgCurrent) {
-          bgCurrent = nextBg;
-          bg.style.backgroundImage = nextBg ? `url("${nextBg}")` : "";
+        const bgUrl = nextBg
+          ? nextBg + (nextBg.indexOf("?") >= 0 ? "&" : "?") + "t=" + gen
+          : "";
+        if (bgUrl !== bgCurrent) {
+          bgCurrent = bgUrl;
+          if (bgImg) {
+            if (bgUrl) {
+              bgImg.src = bgUrl;
+              bgImg.style.display = "block";
+            } else {
+              bgImg.removeAttribute("src");
+              bgImg.style.display = "none";
+            }
+          }
         }
-      } catch (e) {}
+      } catch (e) {
+        console.error("Mosaico front tick:", e);
+      }
     }
 
     function cycleSpotlight() {
       if (!shouldShowSpotlight()) return;
-      if (!known.length) return;
-      if (cycleIndex >= known.length) cycleIndex = 0;
-      const src = known[cycleIndex];
+      if (feederRunning || feederAwaitingSpotlight || pendingQueue.length) return;
+      if (spotlightPipelineBusy()) return;
+      const list = sortImageUrls(known);
+      if (!list.length) return;
+      if (cycleIndex >= list.length) cycleIndex = 0;
+      const src = list[cycleIndex];
       cycleIndex += 1;
-      if (src) showSpotlight(src);
+      if (src) scheduleSpotlight(src);
     }
 
     applyGridLayout();
     tick();
+    setTimeout(function() {
+      if (!renderedSet.size) tick();
+    }, 400);
     /* ~0,8 s: resposta mais rapida; syncQueue evita trabalho quando o estado nao muda. */
-    setInterval(tick, 800);
-    setInterval(cycleSpotlight, 10000);
+    setInterval(tick, 500);
+    setInterval(cycleSpotlight, 14000);
 
     window.addEventListener("resize", () => {
-      if (!settings.duplicate_fill) return;
+      applyGridLayout();
       clearTimeout(resizeTimer);
       resizeTimer = setTimeout(() => {
-        lastDupSig = "";
-        lastMosaicFp = "";
-        tick();
-      }, 200);
+        const layoutChanged = applyGridLayout();
+        if (layoutChanged && firstSyncDone && known.length) {
+          rebuildGridTiles();
+        } else if (settings.duplicate_fill) {
+          lastDupSig = "";
+          lastMosaicFp = "";
+          tick();
+        }
+      }, 280);
     });
 
-    // Live reload: recarrega a aba quando o template HTML mudar no servidor.
-    let __frontVersion = null;
-    async function checkVersion() {
-      try {
-        const r = await fetch("/api/version", { cache: "no-store" });
-        if (!r.ok) return;
-        const d = await r.json();
-        if (__frontVersion == null) {
-          __frontVersion = d.version;
-          return;
-        }
-        if (d.version !== __frontVersion) {
-          location.reload();
-        }
-      } catch (e) {}
-    }
-    setInterval(checkVersion, 2500);
+    /* Recarregue com Ctrl+F5 apos atualizar o codigo (reload automatico desativado). */
   </script>
 </body>
 </html>
@@ -631,21 +1001,21 @@ class _FrontendHandler(BaseHTTPRequestHandler):
             return
 
         if path.startswith("/mosaic/"):
-            name = path.removeprefix("/mosaic/")
+            name = path.removeprefix("/mosaic/").split("?")[0]
             file_path = (self.server_ref.mosaic_dir / name).resolve()
-            if not str(file_path).startswith(str(self.server_ref.mosaic_dir.resolve())) or not file_path.exists():
+            mosaic_root = self.server_ref.mosaic_dir.resolve()
+            if not str(file_path).startswith(str(mosaic_root)) or not file_path.is_file():
                 self.send_error(404)
                 return
-            ctype = mimetypes.guess_type(str(file_path))[0] or "application/octet-stream"
-            body = file_path.read_bytes()
+            if needs_mosaic_normalize(file_path):
+                body, ctype = oriented_image_bytes(file_path)
+            else:
+                body = file_path.read_bytes()
+                ctype = mimetypes.guess_type(str(file_path))[0] or _guess_image_mime(body)
             self.send_response(200)
             self.send_header("Content-Type", ctype)
             self.send_header("Content-Length", str(len(body)))
-            stem = file_path.stem.lower()
-            if re.match(r"^img\d+$", stem):
-                self.send_header("Cache-Control", "public, max-age=604800, immutable")
-            else:
-                self.send_header("Cache-Control", "public, max-age=3600")
+            self.send_header("Cache-Control", "no-store")
             self.end_headers()
             self.wfile.write(body)
             return
@@ -655,12 +1025,12 @@ class _FrontendHandler(BaseHTTPRequestHandler):
             if bg is None or not bg.exists():
                 self.send_error(404)
                 return
-            ctype = mimetypes.guess_type(str(bg))[0] or "application/octet-stream"
             body = bg.read_bytes()
+            ctype = mimetypes.guess_type(str(bg))[0] or "application/octet-stream"
             self.send_response(200)
             self.send_header("Content-Type", ctype)
             self.send_header("Content-Length", str(len(body)))
-            self.send_header("Cache-Control", "public, max-age=600")
+            self.send_header("Cache-Control", "no-store")
             self.end_headers()
             self.wfile.write(body)
             return
@@ -672,16 +1042,21 @@ class SimpleMosaicFrontend:
     def __init__(self, host: str = "127.0.0.1", port: int = 8765):
         self.host = host
         self.port = port
-        self.mosaic_dir = Path.cwd() / "MOSAIC"
+        self.mosaic_dir = _PROJECT_DIR / "MOSAIC"
         self.background_path: Path | None = None
 
         # Configs sincronizadas com a interface principal.
         self.animation_mode: str = "soft_zoom_fade"
         self.animation_intensity: str = "medio"
         self.tile_interval_ms: int = 360
-        self.tile_size_px: int = 120
+        self.tile_size_px: int = 48
         self.mosaic_fullscreen: bool = True
         self.duplicate_fill: bool = False
+        self.mosaic_width: int = TELAO_LARGURA_PX
+        self.mosaic_height: int = TELAO_ALTURA_PX
+        self.mosaic_cols: int = TELAO_COLUNAS
+        self.mosaic_rows: int = TELAO_LINHAS
+        self.spotlight_min_gap_ms: int = TELAO_SPOTLIGHT_GAP_MS
 
         self._httpd: ThreadingHTTPServer | None = None
         self._thread: threading.Thread | None = None
@@ -692,6 +1067,12 @@ class SimpleMosaicFrontend:
         self._images_list_cache: list[str] | None = None
         self._images_list_mtime: int | None = None
         self._images_cache_gen: int = -1
+    def reset_mosaic_catalog(self) -> None:
+        """Zera lista em cache apos limpar a pasta MOSAIC."""
+        self._mosaic_generation = 0
+        self._images_list_cache = None
+        self._images_list_mtime = None
+        self._images_cache_gen = -1
 
     def update_settings(
         self,
@@ -717,7 +1098,7 @@ class SimpleMosaicFrontend:
                 pass
         if tile_size_px is not None:
             try:
-                self.tile_size_px = max(64, min(220, int(tile_size_px)))
+                self.tile_size_px = max(28, min(96, int(tile_size_px)))
             except (TypeError, ValueError):
                 pass
         if mosaic_fullscreen is not None:
@@ -735,7 +1116,6 @@ class SimpleMosaicFrontend:
         self._images_list_mtime = None
 
     def _list_mosaic_image_urls(self) -> list[str]:
-        exts = {".jpg", ".jpeg", ".png", ".bmp", ".webp", ".jfif"}
         try:
             mtime_ns = int(self.mosaic_dir.stat().st_mtime_ns)
         except OSError:
@@ -751,19 +1131,24 @@ class SimpleMosaicFrontend:
             m = re.match(r"^img(\d+)$", path.stem.lower())
             if m:
                 return (0, int(m.group(1)), path.name.lower())
-            return (1, 0, path.name.lower())
+            try:
+                mt = path.stat().st_mtime_ns
+            except OSError:
+                mt = 0
+            return (1, mt, path.name.lower())
 
+        gen = int(self._mosaic_generation)
         images: list[str] = []
         try:
             for p in sorted(self.mosaic_dir.iterdir(), key=_order_key):
-                if p.is_file() and p.suffix.lower() in exts:
-                    images.append(f"/mosaic/{p.name}")
+                if _is_image_file(p):
+                    images.append(f"/mosaic/{quote(p.name)}?v={gen}")
         except OSError:
             images = []
 
         self._images_list_cache = images
         self._images_list_mtime = mtime_ns
-        self._images_cache_gen = int(self._mosaic_generation)
+        self._images_cache_gen = gen
         return images
 
     def build_state(self) -> dict:
@@ -779,6 +1164,11 @@ class SimpleMosaicFrontend:
                 "tile_size_px": self.tile_size_px,
                 "mosaic_fullscreen": self.mosaic_fullscreen,
                 "duplicate_fill": self.duplicate_fill,
+                "mosaic_width": self.mosaic_width,
+                "mosaic_height": self.mosaic_height,
+                "mosaic_cols": self.mosaic_cols,
+                "mosaic_rows": self.mosaic_rows,
+                "spotlight_min_gap_ms": self.spotlight_min_gap_ms,
             },
         }
 
