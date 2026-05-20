@@ -77,6 +77,8 @@ class GaleriaMonitorApp:
                 "fundo.jpg",
                 "fundo_evento_1024x825.png",
                 "backdrop.png",
+                "fundobaixosemtexto.png",
+                "fundobaixo.png",
             )
         )
         self.overlay_var = tk.StringVar(
@@ -381,7 +383,7 @@ class GaleriaMonitorApp:
         ).grid(row=0, column=2, sticky="w")
         ttk.Checkbutton(
             card_direito,
-            text="Grelha em tela cheia no navegador",
+            text="Grelha em tela cheia (preenche o navegador)",
             variable=self.navegador_grade_tela_cheia_var,
             style="App.TCheckbutton",
         ).grid(row=4, column=0, sticky="w", pady=(6, 0))
@@ -615,7 +617,7 @@ class GaleriaMonitorApp:
             f"- Grade estimada: {colunas} x {linhas} ({total} fotos)\n"
             f"- Intervalo entre fotos no painel: {intervalo_ms} ms\n"
             f"- Animacao: {animacao} ({intensidade})\n"
-            f"- Navegador: pastilha {nav_tile} px, tela cheia {nav_full}, duplicar grelha {nav_dup}\n"
+            f"- Navegador: telao 768x960, pastilha {nav_tile} px, tela cheia {nav_full}, duplicar grelha {nav_dup}\n"
             f"- Fundo (telao): {self._backdrop_resumo()} | Overlay (logo): {self._overlay_resumo()}"
         )
         self.summary_var.set(resumo)
@@ -699,22 +701,6 @@ class GaleriaMonitorApp:
                         pass
                     self.live_panel = None
                     self._ultima_assinatura_painel = assinatura_atual
-
-            # Se ficar um tempo sem novas imagens, dispara montagem final em stagger.
-            if (
-                self._painel_ativo()
-                and self.live_panel is not None
-                and self.painel_ao_vivo_var.get()
-                and not self._stagger_em_execucao
-                and self._ultimo_evento_imagem_ts > 0
-            ):
-                if time.time() - self._ultimo_evento_imagem_ts >= self._idle_para_stagger_s:
-                    try:
-                        self.live_panel.play_staggered_flow()
-                        self._stagger_em_execucao = True
-                        self.log_var.set("Staggered flow: mosaico final montado em cascata.")
-                    except Exception as exc:
-                        self.log_var.set(f"Falha no staggered flow: {exc}")
         finally:
             self.root.after(800, self._auto_reload_tick)
 
@@ -1019,15 +1005,21 @@ class GaleriaMonitorApp:
 
         def work() -> None:
             try:
-                ok, falhas = injetar_ficheiros(
-                    pasta,
-                    paths,
-                    aplicar_moldura=aplicar,
-                    intervalo_s=intervalo_s,
-                    log_callback=log_ui,
-                    nova_imagem_callback=self._queue_new_image,
-                )
-                log_ui(f"Injecao concluida: {ok} foto(s), {falhas} ignorada(s) ou com erro.")
+                ok_t, fail_t = 0, 0
+                for p in paths:
+                    o, f = injetar_ficheiros(
+                        pasta,
+                        [p],
+                        aplicar_moldura=aplicar,
+                        intervalo_s=0.0,
+                        log_callback=log_ui,
+                        nova_imagem_callback=self._queue_new_image,
+                    )
+                    ok_t += o
+                    fail_t += f
+                    if intervalo_s > 0 and (ok_t + fail_t) < len(paths):
+                        time.sleep(intervalo_s)
+                log_ui(f"Injecao concluida: {ok_t} foto(s), {fail_t} ignorada(s) ou com erro.")
             except Exception as exc:
                 log_ui(f"Injecao abortada: {exc}")
             finally:
@@ -1186,8 +1178,6 @@ class GaleriaMonitorApp:
         """Sempre na thread principal: painel ao vivo (se ativo) + sinal ao navegador."""
 
         def apply() -> None:
-            self._ultimo_evento_imagem_ts = time.time()
-            self._stagger_em_execucao = False
             if self.painel_ao_vivo_var.get():
                 self._mosaic_pending.put(image_path)
                 self._mosaic_try_start_feeder()
@@ -1216,18 +1206,18 @@ class GaleriaMonitorApp:
 
     def _limpar_mosaico(self):
         total_arquivos_removidos = 0
-        pasta_mosaic = Path.cwd() / "MOSAIC"
-        extensoes_imagem = {".jpg", ".jpeg", ".png", ".bmp", ".webp", ".jfif"}
+        falhas = 0
+        pasta_mosaic = _PROJECT_DIR / "MOSAIC"
+        pasta_mosaic.mkdir(parents=True, exist_ok=True)
 
-        if pasta_mosaic.exists() and pasta_mosaic.is_dir():
-            for caminho in pasta_mosaic.iterdir():
-                if caminho.is_file() and caminho.suffix.lower() in extensoes_imagem:
-                    try:
-                        caminho.unlink()
-                        total_arquivos_removidos += 1
-                    except Exception:
-                        # Se um arquivo estiver em uso, ignora e segue os demais.
-                        pass
+        for caminho in list(pasta_mosaic.iterdir()):
+            if not caminho.is_file():
+                continue
+            try:
+                caminho.unlink()
+                total_arquivos_removidos += 1
+            except Exception:
+                falhas += 1
 
         try:
             self.web_frontend.reset_mosaic_catalog()
@@ -1238,9 +1228,10 @@ class GaleriaMonitorApp:
         try:
             if self.live_panel is not None:
                 self.live_panel.clear_tiles()
-            self.log_var.set(
-                f"Mosaico limpo. {total_arquivos_removidos} arquivo(s) removido(s) da pasta MOSAIC."
-            )
+            msg = f"Mosaico limpo. {total_arquivos_removidos} arquivo(s) removido(s) da pasta MOSAIC."
+            if falhas:
+                msg += f" ({falhas} nao removido(s).)"
+            self.log_var.set(msg)
             self.status_var.set("Status: Mosaico e pasta MOSAIC limpos")
         except Exception as exc:
             self.log_var.set(f"Falha ao limpar mosaico: {exc}")

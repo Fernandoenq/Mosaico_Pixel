@@ -16,6 +16,7 @@ from pathlib import Path
 from PIL import Image, ImageOps
 
 from criar_video_album import gerar_todos_os_videos
+from image_orientation import normalize_for_display
 
 
 PASTA_MOSAIC = Path("MOSAIC")
@@ -32,7 +33,7 @@ EXTENSOES_SUPORTADAS = {
     ".tiff",
     ".heic",
 }
-INTERVALO_MONITORAMENTO = 0.7
+INTERVALO_MONITORAMENTO = 0.45
 # Apos a ultima foto processada, espera este silencio antes de gerar video (evita N geracoes em rajada).
 DEBOUNCE_GERACAO_VIDEO_S = 3.5
 MOLDURA_PIXELS = 20
@@ -143,7 +144,8 @@ def processar_imagem(
         else:
             print(msg)
 
-    with Image.open(caminho_imagem) as img:
+    with Image.open(caminho_imagem) as raw:
+        img = normalize_for_display(raw)
         if img.mode != "RGB":
             img = img.convert("RGB")
 
@@ -302,6 +304,7 @@ def listar_novas_imagens(
         if chave not in vistos_agora:
             pendentes.pop(chave, None)
 
+    imagens.sort(key=lambda p: p.stat().st_mtime_ns)
     return imagens
 
 
@@ -392,6 +395,9 @@ def monitorar_e_gerar(
         while not stop_signal.is_set():
             novas = listar_novas_imagens(pasta_entrada_path, processadas, pendentes)
             houve_processamento = False
+            # Uma foto por ciclo: fluxo calmo (chega -> destaque -> mosaico -> proxima).
+            if len(novas) > 1:
+                novas = novas[:1]
 
             for caminho in novas:
                 if pausa_entre_fotos_s > 0 and not stop_signal.is_set() and ultima_injecao_mon > 0.0:
