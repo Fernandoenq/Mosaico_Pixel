@@ -175,8 +175,7 @@ HTML_PAGE = """<!doctype html>
       overflow: hidden;
     }
     .grid.focused {
-      filter: blur(2px) brightness(0.78);
-      transition: filter 380ms cubic-bezier(0.22, 1, 0.36, 1);
+      filter: none;
     }
     .tile {
       position: relative;
@@ -201,12 +200,9 @@ HTML_PAGE = """<!doctype html>
       object-position: center;
       image-rendering: auto;
       display: block;
-      opacity: 0;
-      transition: opacity 0.55s ease;
+      opacity: 1;
     }
-    .tile.tile-waiting-spotlight .tile-photo {
-      opacity: 0;
-    }
+    .tile.tile-waiting-spotlight .tile-photo,
     .tile.tile-in-mosaic .tile-photo {
       opacity: 1;
     }
@@ -221,15 +217,15 @@ HTML_PAGE = """<!doctype html>
       animation: pureFade var(--entry-ms, 420ms) ease both;
     }
     @keyframes softZoomFadeIn {
-      0% { opacity: 0; }
+      0% { opacity: 1; }
       100% { opacity: 1; }
     }
     @keyframes cascadeIn {
-      0% { opacity: 0; }
+      0% { opacity: 1; }
       100% { opacity: 1; }
     }
     @keyframes pureFade {
-      0% { opacity: 0; }
+      0% { opacity: 1; }
       100% { opacity: 1; }
     }
     .spotlight {
@@ -376,7 +372,7 @@ HTML_PAGE = """<!doctype html>
     }
 
     /* Overlay por cima do mosaico (invisível): cada célula revela só tile ∩ logo, tinte semitransparente. */
-    const OVERLAY_TINT_ALPHA = 0.68;
+    const OVERLAY_TINT_ALPHA = 0.88;
     const REVEAL_TILE_STAGGER_MS = 10;
     let overlayRevealMask = null;
     let overlayRevealMaskCtx = null;
@@ -386,6 +382,7 @@ HTML_PAGE = """<!doctype html>
     let overlayLayerPinned = false;
     let tileRevealGen = 0;
     let redrawOverlayPending = 0;
+    let overlayRescanPending = 0;
 
     function cancelOverlayRevealTrack() {
       if (overlayRevealRaf) {
@@ -432,11 +429,26 @@ HTML_PAGE = """<!doctype html>
     function resetOverlayReveal() {
       cancelOverlayRevealTrack();
       cancelRedrawOverlayPending();
+      if (overlayRescanPending) {
+        cancelAnimationFrame(overlayRescanPending);
+        overlayRescanPending = 0;
+      }
       tileRevealGen += 1;
       overlayRevealMask = null;
       overlayRevealMaskCtx = null;
       overlayHasReveal = false;
       hideOverlayLayer();
+    }
+
+    function scheduleOverlayRescan() {
+      if (!overlayCurrent) return;
+      if (overlayRescanPending) return;
+      overlayRescanPending = requestAnimationFrame(function() {
+        overlayRescanPending = requestAnimationFrame(function() {
+          overlayRescanPending = 0;
+          rescanOverlayReveal();
+        });
+      });
     }
 
     function loadOverlayArt(url) {
@@ -450,9 +462,13 @@ HTML_PAGE = """<!doctype html>
       overlayArtImage = img;
       img.onload = function() {
         if (overlayArtImage !== img) return;
-        overlayRevealMask = null;
+        if (overlayRevealMaskCtx && overlayRevealMask) {
+          overlayRevealMaskCtx.clearRect(
+            0, 0, overlayRevealMask.width, overlayRevealMask.height
+          );
+        }
         overlayHasReveal = false;
-        hideOverlayLayer();
+        if (renderedSet.size) scheduleOverlayRescan();
       };
       img.onerror = function() {
         if (overlayArtImage !== img) return;
@@ -526,12 +542,14 @@ HTML_PAGE = """<!doctype html>
         || overlayRevealMask.width !== w
         || overlayRevealMask.height !== h
       ) {
+        const hadReveal = overlayHasReveal || overlayLayerPinned;
         overlayRevealMask = document.createElement("canvas");
         overlayRevealMask.width = w;
         overlayRevealMask.height = h;
         overlayRevealMaskCtx = overlayRevealMask.getContext("2d", { alpha: true });
         overlayRevealMaskCtx.clearRect(0, 0, w, h);
         overlayHasReveal = false;
+        if (hadReveal && overlayCurrent) scheduleOverlayRescan();
       }
       return overlayRevealMaskCtx;
     }
@@ -650,8 +668,11 @@ HTML_PAGE = """<!doctype html>
       const w = overlayRevealCanvas.width;
       const h = overlayRevealCanvas.height;
       if (!overlayRevealIsActive()) {
-        overlayHasReveal = false;
-        hideOverlayLayer();
+        /* Mosaico a preencher: não esconder camada já revelada até a máscara ser reposta. */
+        if (!overlayLayerPinned) {
+          overlayHasReveal = false;
+          hideOverlayLayer();
+        }
         return;
       }
       if (!overlayArtImage.complete || overlayArtImage.naturalWidth < 1) {
@@ -741,10 +762,10 @@ HTML_PAGE = """<!doctype html>
 
     function rescanOverlayReveal() {
       if (!overlayCurrent) return;
-      overlayRevealMask = null;
+      const ctx = ensureOverlayRevealMask();
+      if (!ctx || !overlayRevealMask) return;
+      ctx.clearRect(0, 0, overlayRevealMask.width, overlayRevealMask.height);
       overlayHasReveal = false;
-      tileRevealGen += 1;
-      if (!ensureOverlayRevealMask()) return;
       for (const node of srcToNode.values()) {
         if (node.classList.contains("tile-waiting-spotlight")) continue;
         stampTileReveal(node);
@@ -813,8 +834,11 @@ HTML_PAGE = """<!doctype html>
         grid.style.setProperty("--tile-size", ts + "px");
         grid.style.gridTemplateColumns = "repeat(" + layoutCols + ", " + ts + "px)";
         grid.style.gridAutoRows = ts + "px";
+        const pin = overlayLayerPinned;
         overlayRevealMask = null;
+        overlayRevealMaskCtx = null;
         overlayHasReveal = false;
+        if (pin && overlayCurrent) scheduleOverlayRescan();
       }
       return changed;
     }
@@ -891,11 +915,7 @@ HTML_PAGE = """<!doctype html>
       firstSyncDone = true;
       firstSyncPending = false;
       gridCursor = Math.max(gridCursor, renderedSet.size);
-      if (overlayCurrent) {
-        requestAnimationFrame(function() {
-          rescanOverlayReveal();
-        });
-      }
+      if (overlayCurrent) scheduleOverlayRescan();
     }
 
     function expandToTarget(base, target) {
@@ -1369,7 +1389,13 @@ HTML_PAGE = """<!doctype html>
       feederAwaitingSpotlight = false;
       cycleIndex = 0;
       gridCursor = 0;
-      resetOverlayReveal();
+      if (overlayRevealMaskCtx && overlayRevealMask) {
+        overlayRevealMaskCtx.clearRect(
+          0, 0, overlayRevealMask.width, overlayRevealMask.height
+        );
+      }
+      overlayHasReveal = false;
+      /* Mantém último frame no canvas até o próximo rescan (evita sumir ao completar grelha). */
     }
 
     function startFeederIfNeeded() {
@@ -1589,7 +1615,7 @@ HTML_PAGE = """<!doctype html>
     setInterval(cycleSpotlight, 14000);
 
     function relayoutOverlayReveal() {
-      rescanOverlayReveal();
+      scheduleOverlayRescan();
     }
 
     window.addEventListener("resize", () => {
@@ -1646,6 +1672,14 @@ class _FrontendHandler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):  # noqa: N802
         return
 
+    @staticmethod
+    def _safe_write(wfile, body: bytes) -> bool:
+        try:
+            wfile.write(body)
+            return True
+        except (ConnectionAbortedError, ConnectionResetError, BrokenPipeError, OSError):
+            return False
+
     def _send_json(self, payload: dict):
         data = json.dumps(payload).encode("utf-8")
         self.send_response(200)
@@ -1653,7 +1687,7 @@ class _FrontendHandler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         self.send_header("Content-Length", str(len(data)))
         self.end_headers()
-        self.wfile.write(data)
+        self._safe_write(self.wfile, data)
 
     def _send_bytes(self, body: bytes, content_type: str):
         self.send_response(200)
@@ -1661,7 +1695,7 @@ class _FrontendHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
-        self.wfile.write(body)
+        self._safe_write(self.wfile, body)
 
     def do_GET(self):  # noqa: N802
         parsed = urlparse(self.path)
@@ -1703,7 +1737,7 @@ class _FrontendHandler(BaseHTTPRequestHandler):
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Cache-Control", "no-store")
             self.end_headers()
-            self.wfile.write(body)
+            self._safe_write(self.wfile, body)
             return
 
         if path in ("/background", "/backdrop"):
@@ -1718,7 +1752,7 @@ class _FrontendHandler(BaseHTTPRequestHandler):
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Cache-Control", "no-store")
             self.end_headers()
-            self.wfile.write(body)
+            self._safe_write(self.wfile, body)
             return
 
         if path == "/overlay":
@@ -1733,7 +1767,7 @@ class _FrontendHandler(BaseHTTPRequestHandler):
             self.send_header("Content-Length", str(len(body)))
             self.send_header("Cache-Control", "no-store")
             self.end_headers()
-            self.wfile.write(body)
+            self._safe_write(self.wfile, body)
             return
 
         self.send_error(404)
