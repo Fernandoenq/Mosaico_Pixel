@@ -18,6 +18,8 @@ from galeria_monitor import EXTENSOES_SUPORTADAS, injetar_ficheiros, monitorar_e
 from live_mosaic_panel import LiveMosaicPanel
 from simple_frontend import SimpleMosaicFrontend
 
+_PROJECT_DIR = Path(__file__).resolve().parent
+
 
 class GaleriaMonitorApp:
     def __init__(self):
@@ -45,7 +47,7 @@ class GaleriaMonitorApp:
         self.animacao_var = tk.StringVar(value="Soft Zoom Fade-In")
         self.intensidade_animacao_var = tk.StringVar(value="Medio")
         # Navegador / gravacao: pastilha maior = menos celulas (~100-150 em Full HD com ~120 px).
-        self.navegador_pastilha_px_var = tk.IntVar(value=120)
+        self.navegador_pastilha_px_var = tk.IntVar(value=56)
         self.navegador_grade_tela_cheia_var = tk.BooleanVar(value=True)
         # Desligado por defeito: composicao foto a foto; liga para grelha cheia no video.
         self.navegador_duplicar_grade_var = tk.BooleanVar(value=False)
@@ -70,11 +72,22 @@ class GaleriaMonitorApp:
         screen_h = self.root.winfo_screenheight()
         self.largura_painel_var = tk.IntVar(value=max(640, screen_w // 2))
         self.altura_painel_var = tk.IntVar(value=max(360, screen_h // 2))
-        self.fundo_painel_var = tk.StringVar(value=self._fundo_padrao())
+        self.backdrop_var = tk.StringVar(
+            value=self._arte_padrao(
+                "fundo.jpg",
+                "fundo_evento_1024x825.png",
+                "backdrop.png",
+            )
+        )
+        self.overlay_var = tk.StringVar(
+            value=self._arte_padrao("logo.png", "overlay.png")
+        )
 
         self.live_panel = None
         self.web_frontend = SimpleMosaicFrontend()
         self._ultima_assinatura_painel = None
+        self._ultimo_backdrop_painel = None
+        self._ultimo_overlay_painel = None
         self._ultimo_evento_imagem_ts = 0.0
         self._stagger_em_execucao = False
         self._idle_para_stagger_s = 3.5
@@ -277,15 +290,28 @@ class GaleriaMonitorApp:
 
         ttk.Label(card_esquerdo, text="Configuracao do painel ao vivo", style="Section.TLabel").grid(row=8, column=0, sticky="w")
 
-        fundo_row = ttk.Frame(card_esquerdo, style="Card.TFrame")
-        fundo_row.grid(row=9, column=0, sticky="ew", pady=(6, 10))
-        fundo_row.columnconfigure(1, weight=1)
-        ttk.Label(fundo_row, text="Fundo").grid(row=0, column=0, sticky="w")
-        ttk.Entry(fundo_row, textvariable=self.fundo_painel_var, style="App.TEntry").grid(row=0, column=1, sticky="ew", padx=(8, 8))
-        ttk.Button(fundo_row, text="Selecionar", style="Secondary.TButton", command=self._selecionar_fundo).grid(row=0, column=2)
+        backdrop_row = ttk.Frame(card_esquerdo, style="Card.TFrame")
+        backdrop_row.grid(row=9, column=0, sticky="ew", pady=(6, 6))
+        backdrop_row.columnconfigure(1, weight=1)
+        ttk.Label(backdrop_row, text="Fundo (atrás do mosaico)").grid(row=0, column=0, sticky="w")
+        ttk.Entry(backdrop_row, textvariable=self.backdrop_var, style="App.TEntry").grid(
+            row=0, column=1, sticky="ew", padx=(8, 8)
+        )
+        ttk.Button(backdrop_row, text="…", style="Secondary.TButton", command=self._selecionar_backdrop).grid(
+            row=0, column=2
+        )
+
+        overlay_row = ttk.Frame(card_esquerdo, style="Card.TFrame")
+        overlay_row.grid(row=10, column=0, sticky="ew", pady=(0, 10))
+        overlay_row.columnconfigure(1, weight=1)
+        ttk.Label(overlay_row, text="Overlay (logo por cima)").grid(row=0, column=0, sticky="w")
+        ttk.Entry(overlay_row, textvariable=self.overlay_var, style="App.TEntry").grid(
+            row=0, column=1, sticky="ew", padx=(8, 8)
+        )
+        ttk.Button(overlay_row, text="…", style="Secondary.TButton", command=self._selecionar_overlay).grid(row=0, column=2)
 
         tamanho_row = ttk.Frame(card_esquerdo, style="Card.TFrame")
-        tamanho_row.grid(row=10, column=0, sticky="ew", pady=(0, 10))
+        tamanho_row.grid(row=11, column=0, sticky="ew", pady=(0, 10))
         ttk.Label(tamanho_row, text="Largura").grid(row=0, column=0, sticky="w")
         ttk.Entry(tamanho_row, textvariable=self.largura_painel_var, width=8, style="App.TEntry").grid(row=0, column=1, padx=(6, 12))
         ttk.Label(tamanho_row, text="Altura").grid(row=0, column=2, sticky="w")
@@ -294,7 +320,7 @@ class GaleriaMonitorApp:
         ttk.Entry(tamanho_row, textvariable=self.celula_var, width=8, style="App.TEntry").grid(row=0, column=5, padx=(6, 0))
 
         timing_row = ttk.Frame(card_esquerdo, style="Card.TFrame")
-        timing_row.grid(row=11, column=0, sticky="ew", pady=(0, 10))
+        timing_row.grid(row=12, column=0, sticky="ew", pady=(0, 10))
         ttk.Label(timing_row, text="Intervalo entre fotos no painel (ms)").grid(row=0, column=0, sticky="w")
         ttk.Entry(timing_row, textvariable=self.intervalo_mosaico_ms_var, width=8, style="App.TEntry").grid(
             row=0, column=1, padx=(8, 0), sticky="w"
@@ -306,7 +332,7 @@ class GaleriaMonitorApp:
         ).grid(row=0, column=2, padx=(12, 0), sticky="w")
 
         anim_row = ttk.Frame(card_esquerdo, style="Card.TFrame")
-        anim_row.grid(row=12, column=0, sticky="ew", pady=(0, 10))
+        anim_row.grid(row=13, column=0, sticky="ew", pady=(0, 10))
         anim_row.columnconfigure(1, weight=1)
         ttk.Label(anim_row, text="Animacao").grid(row=0, column=0, sticky="w")
         ttk.Combobox(
@@ -331,7 +357,7 @@ class GaleriaMonitorApp:
         ).grid(row=0, column=3, sticky="w", padx=(8, 0))
 
         ttk.Button(card_esquerdo, text="Usar metade da tela", style="Secondary.TButton", command=self._usar_metade_tela).grid(
-            row=13, column=0, sticky="w", pady=(0, 4)
+            row=14, column=0, sticky="w", pady=(0, 4)
         )
 
         ttk.Label(card_direito, text="Resumo da sessao", style="Section.TLabel").grid(row=0, column=0, sticky="w")
@@ -350,7 +376,7 @@ class GaleriaMonitorApp:
         )
         ttk.Label(
             nav_row,
-            text="~120 px ~130-150 fotos visiveis em Full HD (menor = mais fotos).",
+            text="40-80 px; grelha fixa 20 colunas no telao (menor = mais fotos).",
             style="Hint.TLabel",
         ).grid(row=0, column=2, sticky="w")
         ttk.Checkbutton(
@@ -468,7 +494,8 @@ class GaleriaMonitorApp:
             self.intervalo_mosaico_ms_var,
             self.animacao_var,
             self.intensidade_animacao_var,
-            self.fundo_painel_var,
+            self.backdrop_var,
+            self.overlay_var,
             self.navegador_pastilha_px_var,
             self.navegador_grade_tela_cheia_var,
             self.navegador_duplicar_grade_var,
@@ -500,10 +527,48 @@ class GaleriaMonitorApp:
                 animation_mode=self._animation_mode_key(self.animacao_var.get()),
                 animation_intensity=self.intensidade_animacao_var.get().strip().lower(),
                 tile_interval_ms=int(self.intervalo_mosaico_ms_var.get() or 360),
-                tile_size_px=max(64, min(220, int(self.navegador_pastilha_px_var.get() or 120))),
+                tile_size_px=max(40, min(80, int(self.navegador_pastilha_px_var.get() or 56))),
                 mosaic_fullscreen=bool(self.navegador_grade_tela_cheia_var.get()),
                 duplicate_fill=bool(self.navegador_duplicar_grade_var.get()),
             )
+            self.web_frontend.set_backdrop_path(self._backdrop_path_efetivo())
+            self.web_frontend.set_overlay_path(self._overlay_path_efetivo())
+            self._sync_backdrop_painel_ao_vivo()
+            self._sync_overlay_painel_ao_vivo()
+        except Exception:
+            pass
+
+    def _sync_backdrop_painel_ao_vivo(self) -> None:
+        if self.live_panel is None:
+            return
+        try:
+            if not self.live_panel.window.winfo_exists():
+                return
+        except tk.TclError:
+            return
+        path = self._backdrop_path_efetivo()
+        if path == getattr(self, "_ultimo_backdrop_painel", None):
+            return
+        self._ultimo_backdrop_painel = path
+        try:
+            self.live_panel._apply_backdrop(path, reset_tiles=False)
+        except Exception:
+            pass
+
+    def _sync_overlay_painel_ao_vivo(self) -> None:
+        if self.live_panel is None:
+            return
+        try:
+            if not self.live_panel.window.winfo_exists():
+                return
+        except tk.TclError:
+            return
+        path = self._overlay_path_efetivo()
+        if path == getattr(self, "_ultimo_overlay_painel", None):
+            return
+        self._ultimo_overlay_painel = path
+        try:
+            self.live_panel._apply_overlay(path, reset_tiles=False)
         except Exception:
             pass
 
@@ -522,9 +587,9 @@ class GaleriaMonitorApp:
         animacao = self.animacao_var.get().strip() or "Soft Zoom Fade-In"
         intensidade = self.intensidade_animacao_var.get().strip() or "Medio"
         try:
-            nav_tile = max(64, min(220, int(self.navegador_pastilha_px_var.get() or 120)))
+            nav_tile = max(40, min(80, int(self.navegador_pastilha_px_var.get() or 56)))
         except (tk.TclError, ValueError):
-            nav_tile = 120
+            nav_tile = 56
         nav_full = "Sim" if self.navegador_grade_tela_cheia_var.get() else "Nao"
         nav_dup = "Sim" if self.navegador_duplicar_grade_var.get() else "Nao"
         try:
@@ -551,7 +616,7 @@ class GaleriaMonitorApp:
             f"- Intervalo entre fotos no painel: {intervalo_ms} ms\n"
             f"- Animacao: {animacao} ({intensidade})\n"
             f"- Navegador: pastilha {nav_tile} px, tela cheia {nav_full}, duplicar grelha {nav_dup}\n"
-            f"- Fundo selecionado: {'Sim' if self.fundo_painel_var.get().strip() else 'Nao'}"
+            f"- Fundo (telao): {self._backdrop_resumo()} | Overlay (logo): {self._overlay_resumo()}"
         )
         self.summary_var.set(resumo)
 
@@ -563,7 +628,8 @@ class GaleriaMonitorApp:
             int(self.celula_var.get()),
             self.animacao_var.get().strip(),
             self.intensidade_animacao_var.get().strip(),
-            self.fundo_painel_var.get().strip(),
+            self.backdrop_var.get().strip(),
+            self.overlay_var.get().strip(),
         )
 
     @staticmethod
@@ -592,11 +658,14 @@ class GaleriaMonitorApp:
             except Exception:
                 pass
             self.live_panel = None
+        self._ultimo_backdrop_painel = None
+        self._ultimo_overlay_painel = None
         self.live_panel = LiveMosaicPanel(
             master=self.root,
             largura=self.largura_painel_var.get(),
             altura=self.altura_painel_var.get(),
-            fundo_path=self.fundo_painel_var.get().strip() or None,
+            backdrop_path=self._backdrop_path_efetivo(),
+            overlay_path=self._overlay_path_efetivo(),
             celula_px=self.celula_var.get(),
             animation_mode=self._animation_mode_key(self.animacao_var.get()),
             animation_intensity=self.intensidade_animacao_var.get().strip().lower(),
@@ -657,22 +726,69 @@ class GaleriaMonitorApp:
         if pasta_escolhida:
             self.pasta_var.set(pasta_escolhida)
 
-    def _fundo_padrao(self) -> str:
-        candidatos = ["fundobaixosemtexto.png", "fundoaltosemtexto.png", "fundobaixo.png", "fundoalto.png", "fundo.jpg"]
-        for nome in candidatos:
-            p = Path.cwd() / nome
+    def _arte_padrao(self, *nomes: str) -> str:
+        for nome in nomes:
+            p = _PROJECT_DIR / nome
             if p.exists():
                 return str(p.resolve())
         return ""
 
-    def _selecionar_fundo(self):
-        fundo = filedialog.askopenfilename(
-            title="Selecione o fundo da tela de mosaico",
-            initialdir=str(Path.cwd()),
+    def _backdrop_path_efetivo(self) -> str | None:
+        raw = self.backdrop_var.get().strip()
+        if not raw:
+            return None
+        p = Path(raw)
+        if not p.is_file():
+            return None
+        return str(p.resolve())
+
+    def _backdrop_resumo(self) -> str:
+        raw = self.backdrop_var.get().strip()
+        if not raw:
+            return "Nao (preto)"
+        if self._backdrop_path_efetivo():
+            return "Sim"
+        return "Caminho invalido"
+
+    def _overlay_path_efetivo(self) -> str | None:
+        """Logo por cima do mosaico; ignora mascaras de video (fundo*.png)."""
+        raw = self.overlay_var.get().strip()
+        if not raw:
+            return None
+        p = Path(raw)
+        if not p.is_file():
+            return None
+        if p.stem.lower().startswith("fundo"):
+            return None
+        return str(p.resolve())
+
+    def _overlay_resumo(self) -> str:
+        raw = self.overlay_var.get().strip()
+        if not raw:
+            return "Nao"
+        if self._overlay_path_efetivo():
+            return "Sim"
+        if Path(raw).is_file() and Path(raw).stem.lower().startswith("fundo"):
+            return "Ignorado (mascara de video — use overlay.png ou o logo Pic Brand)"
+        return "Caminho invalido"
+
+    def _selecionar_backdrop(self):
+        caminho = filedialog.askopenfilename(
+            title="Fundo do telao (atrás das fotos do mosaico)",
+            initialdir=str(_PROJECT_DIR),
             filetypes=[("Imagens", "*.png *.jpg *.jpeg *.bmp *.webp"), ("Todos", "*.*")],
         )
-        if fundo:
-            self.fundo_painel_var.set(fundo)
+        if caminho:
+            self.backdrop_var.set(caminho)
+
+    def _selecionar_overlay(self):
+        caminho = filedialog.askopenfilename(
+            title="Overlay do evento (logo por cima das fotos)",
+            initialdir=str(_PROJECT_DIR),
+            filetypes=[("Imagens", "*.png *.jpg *.jpeg *.bmp *.webp"), ("Todos", "*.*")],
+        )
+        if caminho:
+            self.overlay_var.set(caminho)
 
     def _usar_metade_tela(self):
         self.largura_painel_var.set(max(640, self.root.winfo_screenwidth() // 2))
@@ -1037,7 +1153,10 @@ class GaleriaMonitorApp:
         renomear_ale = bool(self.renomear_entrada_aleatoria_var.get())
         try:
             self._sincronizar_frontend_web()
-            self.web_frontend.start(background_path=self.fundo_painel_var.get().strip() or None)
+            self.web_frontend.start(
+                backdrop_path=self._backdrop_path_efetivo(),
+                overlay_path=self._overlay_path_efetivo(),
+            )
         except Exception as exc:
             self.log_var.set(f"Falha ao iniciar front web: {exc}")
         if self.painel_ao_vivo_var.get():
@@ -1111,6 +1230,7 @@ class GaleriaMonitorApp:
                         pass
 
         try:
+            self.web_frontend.reset_mosaic_catalog()
             self.web_frontend.notify_mosaic_changed()
         except Exception:
             pass
