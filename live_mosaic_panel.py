@@ -18,6 +18,8 @@ class LiveMosaicPanel:
         largura: int,
         altura: int,
         fundo_path: str | None = None,
+        backdrop_path: str | None = None,
+        overlay_path: str | None = None,
         celula_px: int = 90,
         animation_mode: str = "soft_zoom_fade",
         animation_intensity: str = "medio",
@@ -57,6 +59,8 @@ class LiveMosaicPanel:
 
         self._background_image = None
         self._fundo_imgtk = None
+        self._overlay_item = None
+        self._overlay_photo = None
         self._tile_refs = []
         self._tile_items = [None] * self.max_cells
         self._tile_images = [None] * self.max_cells
@@ -68,19 +72,29 @@ class LiveMosaicPanel:
         self._preview_hide_job = None
         self._pending_spotlights: list[int] = []
         self._queue_token = 0
-        self._apply_background(fundo_path)
+        bg_path = backdrop_path or fundo_path
+        self._apply_backdrop(bg_path, reset_tiles=True)
+        self._apply_overlay(overlay_path, reset_tiles=False)
 
-    def _apply_background(self, fundo_path: str | None):
-        if fundo_path and Path(fundo_path).exists():
-            bg_img = Image.open(fundo_path).convert("RGB")
+    def _apply_backdrop(self, backdrop_path: str | None, *, reset_tiles: bool = False):
+        if backdrop_path and Path(backdrop_path).exists():
+            bg_img = Image.open(backdrop_path).convert("RGB")
         else:
-            bg_img = Image.new("RGB", (self.width, self.height), (255, 255, 255))
-
+            bg_img = Image.new("RGB", (self.width, self.height), (0, 0, 0))
         bg_img = bg_img.resize((self.width, self.height), Image.Resampling.LANCZOS)
         self._background_image = bg_img.copy()
         self._fundo_imgtk = ImageTk.PhotoImage(bg_img)
-        self.canvas.delete("all")
-        self.canvas.create_image(0, 0, anchor="nw", image=self._fundo_imgtk)
+        if reset_tiles:
+            self.canvas.delete("all")
+        else:
+            try:
+                self.canvas.delete("canvas_base")
+            except tk.TclError:
+                pass
+        self.canvas.create_image(0, 0, anchor="nw", image=self._fundo_imgtk, tags=("canvas_base",))
+        if not reset_tiles:
+            self._raise_brand_overlay()
+            return
         self._tile_refs.clear()
         self._tile_items = [None] * self.max_cells
         self._tile_images = [None] * self.max_cells
@@ -92,6 +106,43 @@ class LiveMosaicPanel:
         self._preview_hide_job = None
         self._pending_spotlights.clear()
         self._queue_token += 1
+
+    def _apply_overlay(self, overlay_path: str | None, *, reset_tiles: bool = False):
+        try:
+            self.canvas.delete("brand_overlay")
+        except tk.TclError:
+            pass
+        self._overlay_item = None
+        self._overlay_photo = None
+        if overlay_path and Path(overlay_path).exists():
+            ov = Image.open(overlay_path).convert("RGBA")
+            ov = ov.resize((self.width, self.height), Image.Resampling.LANCZOS)
+            self._overlay_photo = ImageTk.PhotoImage(ov)
+            self._overlay_item = self.canvas.create_image(
+                0, 0, anchor="nw", image=self._overlay_photo, tags=("brand_overlay",)
+            )
+            self.canvas.tag_raise("brand_overlay")
+        if not reset_tiles:
+            self._raise_brand_overlay()
+            return
+        self._tile_refs.clear()
+        self._tile_items = [None] * self.max_cells
+        self._tile_images = [None] * self.max_cells
+        self.cursor = 0
+        self._spotlight_item = None
+        self._focus_overlay_item = None
+        self._focus_overlay_photo = None
+        self._spotlight_running = False
+        self._preview_hide_job = None
+        self._pending_spotlights.clear()
+        self._queue_token += 1
+
+    def _raise_brand_overlay(self):
+        if self._overlay_item is not None:
+            try:
+                self.canvas.tag_raise("brand_overlay")
+            except tk.TclError:
+                pass
 
     def _apply_animation_profile(self):
         perfis = {
@@ -113,19 +164,17 @@ class LiveMosaicPanel:
 
     def _cell_background(self, x: int, y: int):
         if self._background_image is None:
-            return Image.new("RGB", (self.cell_size, self.cell_size), (255, 255, 255))
+            return Image.new("RGB", (self.cell_size, self.cell_size), (0, 0, 0))
         return self._background_image.crop((x, y, x + self.cell_size, y + self.cell_size))
 
     def _compor_frame_tile(self, tile_base: Image.Image, bg_cell: Image.Image, progress: float):
         progress = max(0.0, min(1.0, progress))
         scale = 0.8 + (0.2 * progress)
-        blur_radius = 10.0 * (1.0 - progress)
         opacity = self._opacidade_mosaico * progress
         glow_strength = max(0.0, 1.0 - progress)
 
         tile_rgba = tile_base.convert("RGBA")
-        if blur_radius > 0.05:
-            tile_rgba = tile_rgba.filter(ImageFilter.GaussianBlur(radius=blur_radius))
+        # Sem blur por frame — blur animado fazia as fotos “tremer” na entrada.
 
         scaled = max(1, int(self.cell_size * scale))
         tile_rgba = tile_rgba.resize((scaled, scaled), Image.Resampling.BICUBIC)
@@ -215,6 +264,12 @@ class LiveMosaicPanel:
     def _animate_tile_entry(self, index: int, fade_only: bool = False, delay_ms: int = 0):
         frames = max(3, self._entrada_anim_frames)
         total = max(120, self._entrada_anim_ms)
+        # Fade simples evita resize/blur frame a frame (tremor visual).
+        fade_only = fade_only or self.animation_mode in (
+            "soft_zoom_fade",
+            "staggered_grid_cascade",
+            "pure_fade_mosaic",
+        )
 
         for i in range(frames):
             delay = delay_ms + int(total * i / max(1, frames - 1))
@@ -228,17 +283,20 @@ class LiveMosaicPanel:
 
             self.window.after(delay, _step)
 
+        def _finalize():
+            if not self.window.winfo_exists():
+                return
+            self._render_tile_static(index)
+            self._raise_brand_overlay()
+
+        self.window.after(delay_ms + total + 30, _finalize)
+
     def _set_focus_overlay(self, enabled: bool):
         if enabled:
             if self._focus_overlay_item is not None:
                 return
-            if self._background_image is None:
-                return
-            blurred = self._background_image.filter(ImageFilter.GaussianBlur(radius=5))
-            dark = Image.new("RGBA", (self.width, self.height), (12, 10, 18, 135))
-            base = blurred.convert("RGBA")
-            merged = Image.alpha_composite(base, dark)
-            self._focus_overlay_photo = ImageTk.PhotoImage(merged)
+            dark = Image.new("RGBA", (self.width, self.height), (0, 0, 0, 150))
+            self._focus_overlay_photo = ImageTk.PhotoImage(dark)
             self._focus_overlay_item = self.canvas.create_image(
                 0, 0, anchor="nw", image=self._focus_overlay_photo, tags=("focus_overlay",)
             )
@@ -524,10 +582,10 @@ class LiveMosaicPanel:
             row = index // self.cols
             col = index % self.cols
             cascade_delay = min(220, (row * 16) + (col * 26))
-            self._animate_tile_entry(index, fade_only=False, delay_ms=cascade_delay)
+            self._animate_tile_entry(index, fade_only=True, delay_ms=cascade_delay)
         else:
-            # soft_zoom_fade (padrão)
-            self._animate_tile_entry(index, fade_only=False)
+            # soft_zoom_fade (padrão) — fade estável, sem zoom por frame
+            self._animate_tile_entry(index, fade_only=True)
             self._show_center_preview_nonblocking(index)
 
         self.cursor += 1
@@ -555,29 +613,4 @@ class LiveMosaicPanel:
         self._tile_items = [None] * self.max_cells
         self._tile_images = [None] * self.max_cells
         self.cursor = 0
-
-    def play_staggered_flow(self):
-        """Reconstrói o mosaico atual em cascata de baixo para cima."""
-        if self._stagger_job is not None:
-            try:
-                self.window.after_cancel(self._stagger_job)
-            except Exception:
-                pass
-            self._stagger_job = None
-
-        indices = [idx for idx, tile in enumerate(self._tile_images) if tile is not None]
-        if not indices:
-            return
-
-        # Sem animação: apenas redesenha em ordem natural do mosaico.
-        indices.sort()
-        self.canvas.delete("tiles")
-        self._tile_refs.clear()
-        self._tile_items = [None] * self.max_cells
-        self._set_focus_overlay(False)
-        self._queue_token += 1
-        self._pending_spotlights.clear()
-
-        for idx in indices:
-            self._render_tile_static(idx)
 
