@@ -159,6 +159,7 @@ HTML_PAGE = """<!doctype html>
       z-index: 2;
       overflow: hidden;
       isolation: isolate;
+      contain: layout style;
     }
     .grid {
       --tile-size: 48px;
@@ -190,6 +191,11 @@ HTML_PAGE = """<!doctype html>
       overflow: hidden;
       background: #000;
       border: none;
+      contain: layout paint style;
+    }
+    .tile.tile-animating .tile-photo {
+      will-change: transform;
+      transform: translateZ(0);
     }
     .tile-photo {
       position: relative;
@@ -206,27 +212,70 @@ HTML_PAGE = """<!doctype html>
     .tile.tile-in-mosaic .tile-photo {
       opacity: 1;
     }
-    .tile > .tile-photo.anim-soft_zoom_fade,
+    .tile > .tile-photo[class*="anim-"] {
+      animation-delay: var(--entry-delay, 0ms);
+      animation-timing-function: var(--ease-snap, cubic-bezier(0.16, 1, 0.3, 1));
+      backface-visibility: hidden;
+    }
+    .tile > .tile-photo.anim-soft_zoom_fade {
+      animation-name: softZoomFadeIn;
+      animation-duration: var(--entry-ms, 520ms);
+      animation-fill-mode: both;
+    }
     .tile > .tile-photo.anim-hero_spotlight_pulse {
-      animation: softZoomFadeIn var(--entry-ms, 420ms) cubic-bezier(0.22, 1, 0.36, 1) both;
+      animation-name: heroSpotlightPulse;
+      animation-duration: var(--entry-ms, 520ms);
+      animation-fill-mode: both;
     }
     .tile > .tile-photo.anim-staggered_grid_cascade {
-      animation: cascadeIn var(--entry-ms, 420ms) cubic-bezier(0.22, 1, 0.36, 1) both;
+      animation-name: cascadeIn;
+      animation-duration: var(--entry-ms, 520ms);
+      animation-fill-mode: both;
     }
     .tile > .tile-photo.anim-pure_fade_mosaic {
-      animation: pureFade var(--entry-ms, 420ms) ease both;
+      animation-name: pureSettle;
+      animation-duration: var(--entry-ms, 520ms);
+      animation-fill-mode: both;
     }
     @keyframes softZoomFadeIn {
-      0% { opacity: 1; }
-      100% { opacity: 1; }
+      0% {
+        opacity: 1;
+        transform: scale(0.88) translateZ(0);
+      }
+      100% {
+        opacity: 1;
+        transform: scale(1) translateZ(0);
+      }
     }
     @keyframes cascadeIn {
-      0% { opacity: 1; }
-      100% { opacity: 1; }
+      0% {
+        opacity: 1;
+        transform: translate3d(0, 8px, 0) scale(0.92);
+      }
+      100% {
+        opacity: 1;
+        transform: translate3d(0, 0, 0) scale(1);
+      }
     }
-    @keyframes pureFade {
-      0% { opacity: 1; }
-      100% { opacity: 1; }
+    @keyframes pureSettle {
+      0% {
+        opacity: 1;
+        transform: scale(0.94);
+      }
+      100% {
+        opacity: 1;
+        transform: scale(1);
+      }
+    }
+    @keyframes heroSpotlightPulse {
+      0% {
+        opacity: 1;
+        transform: scale(0.9) translateZ(0);
+      }
+      100% {
+        opacity: 1;
+        transform: scale(1) translateZ(0);
+      }
     }
     .spotlight {
       position: absolute;
@@ -249,18 +298,30 @@ HTML_PAGE = """<!doctype html>
       transition: opacity 340ms cubic-bezier(0.4, 0, 0.2, 1) 80ms;
     }
     .spotlight.enter #spotlightImg {
-      animation: spotlightEnter 520ms cubic-bezier(0.22, 1, 0.36, 1) forwards;
+      animation: spotlightEnter 620ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
     }
     .spotlight.exit #spotlightImg {
-      animation: spotlightExit 560ms cubic-bezier(0.4, 0, 0.2, 1) forwards;
+      animation: spotlightExit 580ms cubic-bezier(0.4, 0, 0.2, 1) forwards;
     }
     @keyframes spotlightEnter {
-      0% { opacity: 0; }
-      100% { opacity: 1; }
+      0% {
+        opacity: 0;
+        transform: scale(0.9);
+      }
+      100% {
+        opacity: 1;
+        transform: scale(1);
+      }
     }
     @keyframes spotlightExit {
-      0% { opacity: 1; }
-      100% { opacity: 0; }
+      0% {
+        opacity: 1;
+        transform: scale(1);
+      }
+      100% {
+        opacity: 0;
+        transform: scale(0.96);
+      }
     }
     #spotlightImg {
       display: block;
@@ -354,8 +415,12 @@ HTML_PAGE = """<!doctype html>
     let bulkAppendSig = "";
     let resizeTimer = null;
     let bulkAppendGen = 0;
-    const BULK_TILE_CHUNK = 24;
-    const BULK_CHUNK_PAUSE_MS = 55;
+    const BULK_TILE_CHUNK = 10;
+    const BULK_CHUNK_PAUSE_MS = 110;
+    const ENTRY_STAGGER_STEP_MS = 32;
+    const ENTRY_STAGGER_MAX_MS = 280;
+    const MAX_PARALLEL_TILE_ANIMS = 5;
+    const EASE_SNAP = "cubic-bezier(0.16, 1, 0.3, 1)";
     const MAX_DUP_FILL_CELLS = 180;
     let lastMosaicFp = "";
     let lastMosaicGen = 0;
@@ -383,6 +448,9 @@ HTML_PAGE = """<!doctype html>
     let tileRevealGen = 0;
     let redrawOverlayPending = 0;
     let overlayRescanPending = 0;
+    let overlayPaintDirty = false;
+    let activeTileAnims = 0;
+    const tileAnimWaitQueue = [];
 
     function cancelOverlayRevealTrack() {
       if (overlayRevealRaf) {
@@ -654,7 +722,12 @@ HTML_PAGE = """<!doctype html>
       const tile = resolveTileNode(node);
       if (!tile || tile.classList.contains("tile-waiting-spotlight")) return;
       if (!tileHitOnLogo(tile)) return;
-      if (stampTileReveal(tile)) redrawOverlay();
+      if (stampTileReveal(tile)) markOverlayDirty();
+    }
+
+    function markOverlayDirty() {
+      overlayPaintDirty = true;
+      redrawOverlay();
     }
 
     function redrawOverlayNow() {
@@ -698,13 +771,17 @@ HTML_PAGE = """<!doctype html>
       if (redrawOverlayPending) return;
       redrawOverlayPending = requestAnimationFrame(function() {
         redrawOverlayPending = 0;
+        if (!overlayPaintDirty && !overlayRevealIsActive()) return;
+        overlayPaintDirty = false;
         redrawOverlayNow();
       });
     }
 
     function redrawOverlaySync() {
       cancelRedrawOverlayPending();
+      overlayPaintDirty = true;
       redrawOverlayNow();
+      overlayPaintDirty = false;
     }
 
     function scheduleTileReveal(node, delayMs) {
@@ -754,10 +831,14 @@ HTML_PAGE = """<!doctype html>
 
     function onTilePlaced(node, batchStagger) {
       if (!node || node.classList.contains("tile-waiting-spotlight")) return;
-      const delay = batchStagger == null
-        ? 24
-        : Math.min(Math.max(0, Number(batchStagger)) * 8, 96);
-      scheduleTileReveal(node, delay);
+      if (activeTileAnims > 0 || tileAnimWaitQueue.length) {
+        const delay = batchStagger == null
+          ? 48
+          : Math.min(Math.max(0, Number(batchStagger)) * 10, 120);
+        scheduleTileReveal(node, delay);
+        return;
+      }
+      scheduleTileReveal(node, 0);
     }
 
     function rescanOverlayReveal() {
@@ -915,7 +996,15 @@ HTML_PAGE = """<!doctype html>
       firstSyncDone = true;
       firstSyncPending = false;
       gridCursor = Math.max(gridCursor, renderedSet.size);
-      if (overlayCurrent) scheduleOverlayRescan();
+      if (!overlayCurrent) return;
+      const deferMs = settings.duplicate_fill
+        ? Math.min(480, intensityProfile().entry + 80)
+        : 0;
+      if (deferMs > 0) {
+        setTimeout(scheduleOverlayRescan, deferMs);
+      } else {
+        scheduleOverlayRescan();
+      }
     }
 
     function expandToTarget(base, target) {
@@ -932,11 +1021,93 @@ HTML_PAGE = """<!doctype html>
     function intensityProfile() {
       /* spotlightExit = ms com o hero em destaque antes da animacao de volta ao mosaico */
       const map = {
-        suave: { entry: 280, spotlightExit: 820 },
-        medio: { entry: 420, spotlightExit: 1320 },
-        forte: { entry: 620, spotlightExit: 1880 },
+        suave: { entry: 380, spotlightExit: 820 },
+        medio: { entry: 520, spotlightExit: 1320 },
+        forte: { entry: 680, spotlightExit: 1880 },
       };
       return map[settings.animation_intensity] || map.medio;
+    }
+
+    function entryStaggerMs(cellIndex) {
+      const idx = Math.max(0, Number(cellIndex) || 0);
+      return Math.min((idx % 18) * ENTRY_STAGGER_STEP_MS, ENTRY_STAGGER_MAX_MS);
+    }
+
+    function clearTileEntryClasses(img) {
+      if (!img) return;
+      img.classList.remove(
+        "anim-soft_zoom_fade",
+        "anim-hero_spotlight_pulse",
+        "anim-staggered_grid_cascade",
+        "anim-pure_fade_mosaic"
+      );
+    }
+
+    function finishTileEntryAnimation(img, tileNode) {
+      clearTileEntryClasses(img);
+      if (tileNode) tileNode.classList.remove("tile-animating");
+      activeTileAnims = Math.max(0, activeTileAnims - 1);
+      if (tileAnimWaitQueue.length && activeTileAnims < MAX_PARALLEL_TILE_ANIMS) {
+        const next = tileAnimWaitQueue.shift();
+        requestAnimationFrame(next);
+      }
+    }
+
+    function runTileEntryAnimation(img, cellIndex, onDone) {
+      const tileNode = img.closest ? img.closest(".tile") : null;
+      const mode = modeKey();
+      const prof = intensityProfile();
+      const bulkMode = !!settings.duplicate_fill;
+      const entryMs = bulkMode
+        ? Math.min(340, prof.entry)
+        : prof.entry;
+      const delayMs = bulkMode
+        ? Math.min((Number(cellIndex) || 0) % MAX_PARALLEL_TILE_ANIMS * 40, 160)
+        : entryStaggerMs(cellIndex);
+      clearTileEntryClasses(img);
+      if (tileNode) tileNode.classList.add("tile-animating");
+      img.style.setProperty("--ease-snap", EASE_SNAP);
+      img.style.setProperty("--entry-ms", entryMs + "ms");
+      img.style.setProperty("--entry-delay", delayMs + "ms");
+      const animClass = mode === "hero_spotlight_pulse"
+        ? "anim-hero_spotlight_pulse"
+        : (bulkMode ? "anim-pure_fade_mosaic" : "anim-" + mode);
+      requestAnimationFrame(function() {
+        img.classList.add(animClass);
+      });
+      if (!onDone) {
+        const cleanupOnly = function() {
+          finishTileEntryAnimation(img, tileNode);
+        };
+        img.addEventListener("animationend", cleanupOnly, { once: true });
+        setTimeout(cleanupOnly, entryMs + delayMs + 60);
+        return;
+      }
+      let settled = false;
+      const done = function() {
+        if (settled) return;
+        settled = true;
+        finishTileEntryAnimation(img, tileNode);
+        onDone();
+      };
+      img.addEventListener("animationend", done, { once: true });
+      setTimeout(done, entryMs + delayMs + 80);
+    }
+
+    function playTileEntryAnimation(img, cellIndex, onDone) {
+      if (!img) {
+        if (onDone) onDone();
+        return;
+      }
+      const launch = function() {
+        activeTileAnims += 1;
+        runTileEntryAnimation(img, cellIndex, onDone);
+      };
+      if (activeTileAnims >= MAX_PARALLEL_TILE_ANIMS) {
+        tileAnimWaitQueue.push(launch);
+        return;
+      }
+      requestAnimationFrame(launch);
     }
 
     function modeKey() {
@@ -1038,11 +1209,13 @@ HTML_PAGE = """<!doctype html>
       if (!node) return;
       node.classList.remove("tile-waiting-spotlight");
       node.classList.add("tile-in-mosaic");
-      requestAnimationFrame(function() {
+      node.dataset.deferEntryAnim = "1";
+      const finish = function() {
         requestAnimationFrame(function() {
           revealTileCellOnLogo(node);
         });
-      });
+      };
+      startTileEntryAnimIfNeeded(node, finish);
     }
 
     function finishSpotlightCycle() {
@@ -1230,11 +1403,7 @@ HTML_PAGE = """<!doctype html>
       } else {
         d.classList.add("tile-in-mosaic");
         if (animated) {
-          img.classList.add("anim-" + modeKey());
-          img.style.setProperty("--entry-ms", intensityProfile().entry + "ms");
-          img.addEventListener("animationend", function() {
-            onTilePlaced(d, 0);
-          }, { once: true });
+          d.dataset.deferEntryAnim = "1";
         } else if (!deferOverlayQueue) {
           queueTileOverlayReveal(d, 0);
         }
@@ -1251,11 +1420,35 @@ HTML_PAGE = """<!doctype html>
       return d;
     }
 
+    function startTileEntryAnimIfNeeded(tileNode, onDone) {
+      if (!tileNode || tileNode.dataset.deferEntryAnim !== "1") {
+        if (onDone) onDone();
+        return;
+      }
+      delete tileNode.dataset.deferEntryAnim;
+      const img = tileNode.querySelector(".tile-photo");
+      const cellIndex = Number(tileNode.dataset.cellIndex) || 0;
+      if (!img) {
+        if (onDone) onDone();
+        return;
+      }
+      requestAnimationFrame(function() {
+        if (!tileNode.isConnected) {
+          if (onDone) onDone();
+          return;
+        }
+        playTileEntryAnimation(img, cellIndex, onDone || null);
+      });
+    }
+
     function appendTileAt(src, animated, cellIndex) {
       const key = mosaicTileKey(src);
       if (renderedSet.has(key)) return;
       const d = createTile(src, animated, false, cellIndex);
       grid.appendChild(d);
+      startTileEntryAnimIfNeeded(d, function() {
+        onTilePlaced(d, 0);
+      });
       renderedSet.add(key);
       srcToNode.set(key, d);
     }
@@ -1268,6 +1461,7 @@ HTML_PAGE = """<!doctype html>
 
     function appendTilesInstantChunk(displayList, start, lazyLoad) {
       const frag = document.createDocumentFragment();
+      const pendingAnim = [];
       const end = Math.min(start + BULK_TILE_CHUNK, displayList.length);
       for (let i = start; i < end; i++) {
         const item = displayList[i];
@@ -1277,12 +1471,26 @@ HTML_PAGE = """<!doctype html>
         if (renderedSet.has(key)) continue;
         const existing = findTileByCellIndex(cellIndex);
         if (existing) continue;
-        const d = createTile(src, false, lazyLoad, cellIndex, true);
+        const d = createTile(src, true, lazyLoad, cellIndex, true);
+        const img = d.querySelector(".tile-photo");
+        if (img) {
+          const localIdx = i - start;
+          img.style.setProperty(
+            "--entry-delay",
+            (localIdx % MAX_PARALLEL_TILE_ANIMS) * 36 + "ms"
+          );
+        }
+        pendingAnim.push(d);
         frag.appendChild(d);
         renderedSet.add(key);
         srcToNode.set(key, d);
       }
       grid.appendChild(frag);
+      requestAnimationFrame(function() {
+        for (const d of pendingAnim) {
+          startTileEntryAnimIfNeeded(d, null);
+        }
+      });
       return end;
     }
 
@@ -1389,6 +1597,8 @@ HTML_PAGE = """<!doctype html>
       feederAwaitingSpotlight = false;
       cycleIndex = 0;
       gridCursor = 0;
+      tileAnimWaitQueue.length = 0;
+      activeTileAnims = 0;
       if (overlayRevealMaskCtx && overlayRevealMask) {
         overlayRevealMaskCtx.clearRect(
           0, 0, overlayRevealMask.width, overlayRevealMask.height
@@ -1411,6 +1621,10 @@ HTML_PAGE = """<!doctype html>
         feederTimer = setTimeout(feedStep, 220);
         return;
       }
+      if (activeTileAnims >= MAX_PARALLEL_TILE_ANIMS) {
+        feederTimer = setTimeout(feedStep, 90);
+        return;
+      }
       if (!pendingQueue.length) {
         feederRunning = false;
         feederAwaitingSpotlight = false;
@@ -1430,7 +1644,12 @@ HTML_PAGE = """<!doctype html>
         feederRunning = false;
         return;
       }
-      const tileMs = Math.max(200, Math.min(8000, Number(settings.tile_interval_ms) || 360));
+      const entryMs = intensityProfile().entry;
+      const configured = Number(settings.tile_interval_ms) || 360;
+      const tileMs = Math.max(
+        200,
+        Math.min(8000, Math.max(configured, entryMs + entryStaggerMs(gridCursor) + 100))
+      );
       feederTimer = setTimeout(feedStep, tileMs);
     }
 
