@@ -44,7 +44,7 @@ class GaleriaMonitorApp:
         self.celula_var = tk.IntVar(value=90)
         # Espaço entre cada foto no painel ao vivo (ms) — evita travar a UI com rajadas.
         self.intervalo_mosaico_ms_var = tk.IntVar(value=360)
-        self.animacao_var = tk.StringVar(value="Soft Zoom Fade-In")
+        self.animacao_var = tk.StringVar(value="Staggered Grid Cascade")
         self.intensidade_animacao_var = tk.StringVar(value="Medio")
         # Navegador / gravacao: pastilha maior = menos celulas (~100-150 em Full HD com ~120 px).
         self.navegador_pastilha_px_var = tk.IntVar(value=56)

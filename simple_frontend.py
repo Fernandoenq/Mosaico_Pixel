@@ -250,7 +250,11 @@ HTML_PAGE = """<!doctype html>
     @keyframes cascadeIn {
       0% {
         opacity: 1;
-        transform: translate3d(0, 8px, 0) scale(0.92);
+        transform: translate3d(var(--entry-from-x, 0), var(--entry-from-y, 14px), 0) scale(0.86);
+      }
+      65% {
+        opacity: 1;
+        transform: translate3d(0, -2px, 0) scale(1.02);
       }
       100% {
         opacity: 1;
@@ -388,7 +392,7 @@ HTML_PAGE = """<!doctype html>
     const SPOTLIGHT_GAP_MS_DEFAULT = 1500;
 
     let settings = {
-      animation_mode: "soft_zoom_fade",
+      animation_mode: "staggered_grid_cascade",
       animation_intensity: "medio",
       tile_interval_ms: 360,
       spotlight_min_gap_ms: 1500,
@@ -417,9 +421,10 @@ HTML_PAGE = """<!doctype html>
     let bulkAppendGen = 0;
     const BULK_TILE_CHUNK = 10;
     const BULK_CHUNK_PAUSE_MS = 110;
-    const ENTRY_STAGGER_STEP_MS = 32;
-    const ENTRY_STAGGER_MAX_MS = 280;
-    const MAX_PARALLEL_TILE_ANIMS = 5;
+    const ENTRY_STAGGER_COL_MS = 26;
+    const ENTRY_STAGGER_ROW_MS = 38;
+    const ENTRY_STAGGER_MAX_MS = 420;
+    const MAX_PARALLEL_TILE_ANIMS = 1;
     const EASE_SNAP = "cubic-bezier(0.16, 1, 0.3, 1)";
     const MAX_DUP_FILL_CELLS = 180;
     let lastMosaicFp = "";
@@ -437,7 +442,7 @@ HTML_PAGE = """<!doctype html>
     }
 
     /* Overlay por cima do mosaico (invisível): cada célula revela só tile ∩ logo, tinte semitransparente. */
-    const OVERLAY_TINT_ALPHA = 0.88;
+    const OVERLAY_TINT_ALPHA = 0.96;
     const REVEAL_TILE_STAGGER_MS = 10;
     let overlayRevealMask = null;
     let overlayRevealMaskCtx = null;
@@ -451,6 +456,58 @@ HTML_PAGE = """<!doctype html>
     let overlayPaintDirty = false;
     let activeTileAnims = 0;
     const tileAnimWaitQueue = [];
+    let tickBusy = false;
+    let tickBackoffMs = 500;
+    let tickTimer = null;
+    let dupSyncTimer = null;
+    let syncApplyLock = false;
+    let lastCatalogFp = "";
+    const health = {
+      ticks: 0,
+      tickErrors: 0,
+      tickSkipped: 0,
+      fullSyncs: 0,
+      unchangedTicks: 0,
+      gridClears: 0,
+      overlayRescans: 0,
+      dupSyncRuns: 0,
+      tilesEnqueued: 0,
+      startedAt: Date.now(),
+    };
+
+    function mosaicListFingerprint(urls) {
+      return sortImageUrls(urls || []).map(mosaicTileKey).join("\\0");
+    }
+
+    function systemBusy() {
+      return (
+        syncApplyLock
+        || firstSyncPending
+        || activeTileAnims > 0
+        || tileAnimWaitQueue.length > 0
+        || spotlightActive
+        || spotlightQueue.length > 0
+        || (feederRunning && pendingQueue.length > 0)
+      );
+    }
+
+    function scheduleDupSync(images) {
+      if (dupSyncTimer) clearTimeout(dupSyncTimer);
+      dupSyncTimer = setTimeout(function() {
+        dupSyncTimer = null;
+        if (syncApplyLock || systemBusy()) {
+          scheduleDupSync(images);
+          return;
+        }
+        const fp = mosaicListFingerprint(images);
+        if (fp && fp === lastMosaicFp && renderedSet.size > 0) {
+          return;
+        }
+        lastMosaicFp = fp;
+        health.dupSyncRuns += 1;
+        syncDuplicateFill(images);
+      }, 220);
+    }
 
     function cancelOverlayRevealTrack() {
       if (overlayRevealRaf) {
@@ -511,16 +568,25 @@ HTML_PAGE = """<!doctype html>
     function scheduleOverlayRescan() {
       if (!overlayCurrent) return;
       if (overlayRescanPending) return;
+      health.overlayRescans += 1;
       overlayRescanPending = requestAnimationFrame(function() {
         overlayRescanPending = requestAnimationFrame(function() {
           overlayRescanPending = 0;
+          if (systemBusy() && activeTileAnims > 0) {
+            setTimeout(scheduleOverlayRescan, 180);
+            return;
+          }
           rescanOverlayReveal();
         });
       });
     }
 
     function loadOverlayArt(url) {
-      overlayCurrent = url || "";
+      const next = url || "";
+      if (next === overlayCurrent && overlayArtImage && overlayArtImage.complete) {
+        return;
+      }
+      overlayCurrent = next;
       resetOverlayReveal();
       if (!url) {
         overlayArtImage = null;
@@ -1028,9 +1094,28 @@ HTML_PAGE = """<!doctype html>
       return map[settings.animation_intensity] || map.medio;
     }
 
-    function entryStaggerMs(cellIndex) {
+    function gridCellFromIndex(cellIndex) {
       const idx = Math.max(0, Number(cellIndex) || 0);
-      return Math.min((idx % 18) * ENTRY_STAGGER_STEP_MS, ENTRY_STAGGER_MAX_MS);
+      const cols = Math.max(1, layoutCols || 20);
+      return { col: idx % cols, row: Math.floor(idx / cols) };
+    }
+
+    /* Onda na grelha: pastilhas organizam-se por coluna/linha (chuncks). */
+    function entryStaggerMs(cellIndex) {
+      const g = gridCellFromIndex(cellIndex);
+      return Math.min(
+        g.col * ENTRY_STAGGER_COL_MS + g.row * ENTRY_STAGGER_ROW_MS,
+        ENTRY_STAGGER_MAX_MS
+      );
+    }
+
+    function applyChunkEntryMotionVars(img, cellIndex) {
+      if (!img) return;
+      const g = gridCellFromIndex(cellIndex);
+      const fromX = (g.col % 2 === 0 ? -8 : 8) + "px";
+      const fromY = (12 + (g.row % 3) * 4) + "px";
+      img.style.setProperty("--entry-from-x", fromX);
+      img.style.setProperty("--entry-from-y", fromY);
     }
 
     function clearTileEntryClasses(img) {
@@ -1055,25 +1140,18 @@ HTML_PAGE = """<!doctype html>
 
     function runTileEntryAnimation(img, cellIndex, onDone) {
       const tileNode = img.closest ? img.closest(".tile") : null;
-      const mode = modeKey();
       const prof = intensityProfile();
-      const bulkMode = !!settings.duplicate_fill;
-      const entryMs = bulkMode
-        ? Math.min(340, prof.entry)
-        : prof.entry;
-      const delayMs = bulkMode
-        ? Math.min((Number(cellIndex) || 0) % MAX_PARALLEL_TILE_ANIMS * 40, 160)
-        : entryStaggerMs(cellIndex);
+      const entryMs = prof.entry;
+      /* Uma animacao por vez: a onda vem da fila em ordem de celula, sem delay CSS extra. */
+      const delayMs = 0;
       clearTileEntryClasses(img);
       if (tileNode) tileNode.classList.add("tile-animating");
       img.style.setProperty("--ease-snap", EASE_SNAP);
       img.style.setProperty("--entry-ms", entryMs + "ms");
       img.style.setProperty("--entry-delay", delayMs + "ms");
-      const animClass = mode === "hero_spotlight_pulse"
-        ? "anim-hero_spotlight_pulse"
-        : (bulkMode ? "anim-pure_fade_mosaic" : "anim-" + mode);
+      applyChunkEntryMotionVars(img, cellIndex);
       requestAnimationFrame(function() {
-        img.classList.add(animClass);
+        img.classList.add("anim-staggered_grid_cascade");
       });
       if (!onDone) {
         const cleanupOnly = function() {
@@ -1111,13 +1189,7 @@ HTML_PAGE = """<!doctype html>
     }
 
     function modeKey() {
-      const allowed = new Set([
-        "soft_zoom_fade",
-        "hero_spotlight_pulse",
-        "staggered_grid_cascade",
-        "pure_fade_mosaic",
-      ]);
-      return allowed.has(settings.animation_mode) ? settings.animation_mode : "soft_zoom_fade";
+      return "staggered_grid_cascade";
     }
 
     function imageOrderKey(src) {
@@ -1346,6 +1418,7 @@ HTML_PAGE = """<!doctype html>
         }
       }
       if (added) {
+        health.tilesEnqueued += added;
         sortPendingQueue();
         startFeederIfNeeded();
       }
@@ -1474,11 +1547,8 @@ HTML_PAGE = """<!doctype html>
         const d = createTile(src, true, lazyLoad, cellIndex, true);
         const img = d.querySelector(".tile-photo");
         if (img) {
-          const localIdx = i - start;
-          img.style.setProperty(
-            "--entry-delay",
-            (localIdx % MAX_PARALLEL_TILE_ANIMS) * 36 + "ms"
-          );
+          img.style.setProperty("--entry-delay", "0ms");
+          applyChunkEntryMotionVars(img, cellIndex);
         }
         pendingAnim.push(d);
         frag.appendChild(d);
@@ -1546,8 +1616,7 @@ HTML_PAGE = """<!doctype html>
       firstSyncPending = true;
 
       const hadTiles = renderedSet.size > 0;
-      const fullRebuild = !hadTiles
-        || Math.abs(display.length - renderedSet.size) > Math.max(12, display.length * 0.35);
+      const fullRebuild = !hadTiles;
 
       if (fullRebuild) {
         clearGrid();
@@ -1584,6 +1653,7 @@ HTML_PAGE = """<!doctype html>
     }
 
     function clearGrid() {
+      health.gridClears += 1;
       bulkAppendGen += 1;
       grid.innerHTML = "";
       renderedSet.clear();
@@ -1654,6 +1724,11 @@ HTML_PAGE = """<!doctype html>
     }
 
     function syncQueueFromServer(images) {
+      const fp = mosaicListFingerprint(images);
+      if (fp && fp === lastMosaicFp && !settings.duplicate_fill) {
+        return;
+      }
+      lastMosaicFp = fp;
       const dup = !!settings.duplicate_fill;
       if (dup !== prevDupFill) {
         prevDupFill = dup;
@@ -1662,7 +1737,7 @@ HTML_PAGE = """<!doctype html>
       }
 
       if (dup) {
-        syncDuplicateFill(images);
+        scheduleDupSync(images);
         return;
       }
 
@@ -1715,18 +1790,25 @@ HTML_PAGE = """<!doctype html>
     }
 
     function applyMosaicDelta(data) {
+      if (data.unchanged) {
+        health.unchangedTicks += 1;
+        return;
+      }
       const gen = Number(data.mosaic_generation) || 0;
+      if (data.catalog_fp) lastCatalogFp = data.catalog_fp;
       if (gen < lastMosaicGen) {
         clearGrid();
         firstSyncDone = false;
         lastMosaicFp = "";
+        lastCatalogFp = "";
         lastDeltaGen = 0;
       }
 
       if (data.full_sync) {
+        health.fullSyncs += 1;
         const images = sortImageUrls(data.images || []);
         known = images;
-        lastMosaicFp = images.map(mosaicTileKey).join("\\0");
+        lastMosaicFp = mosaicListFingerprint(images);
         syncQueueFromServer(known);
         return;
       }
@@ -1752,7 +1834,7 @@ HTML_PAGE = """<!doctype html>
         .filter(Boolean);
       if (addedUrls.length) {
         known = sortImageUrls(known.concat(addedUrls));
-        lastMosaicFp = known.map(mosaicTileKey).join("\\0");
+        lastMosaicFp = mosaicListFingerprint(known);
         if (settings.duplicate_fill) {
           syncQueueFromServer(known);
         } else if (!firstSyncDone) {
@@ -1778,19 +1860,35 @@ HTML_PAGE = """<!doctype html>
     }
 
     async function tick() {
+      if (tickBusy) return;
+      if (systemBusy()) {
+        health.tickSkipped += 1;
+        scheduleTick(Math.max(tickBackoffMs, 900));
+        return;
+      }
+      tickBusy = true;
+      health.ticks += 1;
       try {
+        const fetchOpts = { cache: "no-store" };
+        if (typeof AbortSignal !== "undefined" && AbortSignal.timeout) {
+          fetchOpts.signal = AbortSignal.timeout(8000);
+        }
         const r = await fetch(
           "/api/mosaic/delta?since=" + encodeURIComponent(String(lastDeltaGen)),
-          { cache: "no-store" }
+          fetchOpts
         );
         if (!r.ok) throw new Error("HTTP " + r.status);
         const data = await r.json();
-        if (data.settings) settings = Object.assign(settings, data.settings);
-        const layoutChanged = applyGridLayout();
-        if (layoutChanged && overlayCurrent) {
-          relayoutOverlayReveal();
+        if (data.unchanged) {
+          health.unchangedTicks += 1;
+          tickBackoffMs = 500;
+          lastMosaicGen = Number(data.mosaic_generation) || lastMosaicGen;
+          lastDeltaGen = lastMosaicGen;
+          return;
         }
-        lastSettingsKey = [
+        syncApplyLock = true;
+        if (data.settings) settings = Object.assign(settings, data.settings);
+        const settingsKey = [
           settings.tile_size_px,
           settings.spotlight_min_gap_ms,
           settings.duplicate_fill,
@@ -1802,13 +1900,32 @@ HTML_PAGE = """<!doctype html>
           settings.animation_mode,
           settings.animation_intensity,
         ].join("|");
+        const layoutChanged = applyGridLayout();
+        if (layoutChanged && overlayCurrent) {
+          relayoutOverlayReveal();
+        }
+        lastSettingsKey = settingsKey;
         applyArtFromState(data);
         applyMosaicDelta(data);
         lastMosaicGen = Number(data.mosaic_generation) || 0;
         lastDeltaGen = lastMosaicGen;
+        tickBackoffMs = systemBusy() ? 900 : 500;
       } catch (e) {
+        health.tickErrors += 1;
+        tickBackoffMs = Math.min(4000, tickBackoffMs + 400);
         console.error("Mosaico front tick:", e);
+      } finally {
+        syncApplyLock = false;
+        tickBusy = false;
       }
+    }
+
+    function scheduleTick(ms) {
+      if (tickTimer) clearTimeout(tickTimer);
+      tickTimer = setTimeout(function() {
+        tickTimer = null;
+        tick();
+      }, Math.max(200, ms || tickBackoffMs));
     }
 
     function cycleSpotlight() {
@@ -1823,14 +1940,24 @@ HTML_PAGE = """<!doctype html>
       if (src) scheduleSpotlight(src);
     }
 
+    window.addEventListener("error", function(ev) {
+      health.tickErrors += 1;
+      console.error("Mosaico front erro:", ev.error || ev.message);
+    });
+    window.addEventListener("unhandledrejection", function(ev) {
+      health.tickErrors += 1;
+      console.error("Mosaico front promise:", ev.reason);
+    });
+
     loadOverlayArt("");
     applyGridLayout();
-    tick();
+    scheduleTick(0);
     setTimeout(function() {
-      if (!renderedSet.size) tick();
+      if (!renderedSet.size) scheduleTick(0);
     }, 400);
-    /* ~0,8 s: resposta mais rapida; syncQueue evita trabalho quando o estado nao muda. */
-    setInterval(tick, 500);
+    setInterval(function() {
+      if (!tickBusy) scheduleTick(tickBackoffMs);
+    }, 600);
     setInterval(cycleSpotlight, 14000);
 
     function relayoutOverlayReveal() {
@@ -1846,10 +1973,8 @@ HTML_PAGE = """<!doctype html>
         const changed = applyGridLayout();
         if (changed) relayoutOverlayReveal();
         else if (overlayRevealIsActive()) redrawOverlay();
-        if (settings.duplicate_fill) {
-          lastDupSig = "";
-          lastMosaicFp = "";
-          tick();
+        if (settings.duplicate_fill && !systemBusy()) {
+          scheduleDupSync(known.slice());
         }
       }, 280);
     });
@@ -1917,6 +2042,19 @@ class _FrontendHandler(BaseHTTPRequestHandler):
         self._safe_write(self.wfile, body)
 
     def do_GET(self):  # noqa: N802
+        try:
+            self._do_get_inner()
+        except (ConnectionAbortedError, ConnectionResetError, BrokenPipeError):
+            return
+        except OSError:
+            return
+        except Exception:
+            try:
+                self.send_error(500)
+            except Exception:
+                pass
+
+    def _do_get_inner(self) -> None:
         parsed = urlparse(self.path)
         path = unquote(parsed.path)
 
@@ -2001,7 +2139,7 @@ class SimpleMosaicFrontend:
         self.overlay_path: Path | None = None
 
         # Configs sincronizadas com a interface principal.
-        self.animation_mode: str = "soft_zoom_fade"
+        self.animation_mode: str = "staggered_grid_cascade"
         self.animation_intensity: str = "medio"
         self.tile_interval_ms: int = 360
         self.tile_size_px: int = 48
@@ -2105,9 +2243,12 @@ class SimpleMosaicFrontend:
                 self._mosaic_generation = int(self._mosaic_generation) + 1
             except (TypeError, ValueError):
                 self._mosaic_generation = 1
-            self._snapshots_after_gen[int(self._mosaic_generation)] = ids
-            if len(self._snapshots_after_gen) > 400:
-                for g in sorted(self._snapshots_after_gen.keys())[:-250]:
+            gen = int(self._mosaic_generation)
+            self._snapshots_after_gen[gen] = ids
+            if 0 not in self._snapshots_after_gen:
+                self._snapshots_after_gen[0] = frozenset()
+            if len(self._snapshots_after_gen) > 500:
+                for g in sorted(self._snapshots_after_gen.keys())[:-320]:
                     if g > 0:
                         self._snapshots_after_gen.pop(g, None)
         self._images_list_cache = None
@@ -2167,23 +2308,55 @@ class SimpleMosaicFrontend:
             "spotlight_min_gap_ms": self.spotlight_min_gap_ms,
         }
 
+    def _snapshot_ids_at_or_before(self, since: int) -> frozenset[str] | None:
+        """Estado do catálogo na geração pedida ou na anterior mais próxima."""
+        with self._catalog_lock:
+            if since <= 0:
+                return self._snapshots_after_gen.get(0, frozenset())
+            if since in self._snapshots_after_gen:
+                return self._snapshots_after_gen[since]
+            prior = [g for g in self._snapshots_after_gen if g < since]
+            if not prior:
+                return None
+            return self._snapshots_after_gen[max(prior)]
+
     def build_mosaic_delta(self, since: int) -> dict:
         since = max(0, int(since))
         entries = self._scan_mosaic_entries()
         ids_now = [e["id"] for e in entries]
         set_now = frozenset(ids_now)
         current_gen = int(self._mosaic_generation)
+        catalog_fp = "|".join(sorted(ids_now))
 
-        with self._catalog_lock:
-            ids_after_since = self._snapshots_after_gen.get(since)
-            if ids_after_since is None and since > 0:
-                ids_after_since = None
-            elif ids_after_since is None:
-                ids_after_since = frozenset()
-
-        full_sync = bool(self.duplicate_fill) or (
-            since > 0 and ids_after_since is None
+        ids_after_since = self._snapshot_ids_at_or_before(since)
+        full_sync = ids_after_since is None or (
+            self.duplicate_fill and since == 0 and current_gen > 0
         )
+        if ids_after_since is None:
+            ids_after_since = frozenset()
+
+        if (
+            not full_sync
+            and since == current_gen
+            and not any(i for i in ids_now if i not in ids_after_since)
+            and not any(i for i in ids_after_since if i not in set_now)
+        ):
+            payload = self._art_payload()
+            payload.update(
+                {
+                    "mosaic_generation": current_gen,
+                    "since": since,
+                    "unchanged": True,
+                    "full_sync": False,
+                    "added": [],
+                    "removed": [],
+                    "total": len(entries),
+                    "images": [],
+                    "catalog_fp": catalog_fp,
+                    "settings": self._settings_payload(),
+                }
+            )
+            return payload
 
         if full_sync:
             urls = [e["url"] for e in entries]
@@ -2197,6 +2370,7 @@ class SimpleMosaicFrontend:
                     "removed": [],
                     "total": len(entries),
                     "images": urls,
+                    "catalog_fp": catalog_fp,
                     "settings": self._settings_payload(),
                 }
             )
@@ -2223,6 +2397,7 @@ class SimpleMosaicFrontend:
                 "removed": removed,
                 "total": len(entries),
                 "images": [],
+                "catalog_fp": catalog_fp,
                 "settings": self._settings_payload(),
             }
         )
