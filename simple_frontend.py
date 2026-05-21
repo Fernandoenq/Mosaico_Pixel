@@ -64,7 +64,7 @@ TELAO_MODULO_PX = 192
 TELAO_COLUNAS = 20
 TELAO_LINHAS = 5
 # Intervalo minimo entre destaques no centro (evita cortar animacao da foto anterior).
-TELAO_SPOTLIGHT_GAP_MS = 1500
+TELAO_SPOTLIGHT_GAP_MS = 1000
 
 
 HTML_PAGE = """<!doctype html>
@@ -208,9 +208,19 @@ HTML_PAGE = """<!doctype html>
       display: block;
       opacity: 1;
     }
-    .tile.tile-waiting-spotlight .tile-photo,
+    .tile.tile-waiting-spotlight .tile-photo {
+      opacity: 0;
+    }
     .tile.tile-in-mosaic .tile-photo {
       opacity: 1;
+    }
+    .tile.tile-lock-flash .tile-photo {
+      animation: tileLockFlash 200ms ease-out forwards;
+    }
+    @keyframes tileLockFlash {
+      0% { opacity: 0.5; }
+      50% { opacity: 1; }
+      100% { opacity: 1; }
     }
     .tile > .tile-photo[class*="anim-"] {
       animation-delay: var(--entry-delay, 0ms);
@@ -290,22 +300,51 @@ HTML_PAGE = """<!doctype html>
       justify-content: center;
       pointer-events: none;
       opacity: 0;
+      visibility: hidden;
       line-height: 0;
       font-size: 0;
       transition: opacity 260ms cubic-bezier(0.22, 1, 0.36, 1);
     }
     .spotlight.show {
       opacity: 1;
+      visibility: visible;
     }
     .spotlight.show.exit {
       opacity: 0;
+      visibility: hidden;
       transition: opacity 340ms cubic-bezier(0.4, 0, 0.2, 1) 80ms;
     }
+    .spotlight.fly-mode {
+      display: block;
+    }
+    .spotlight.fly-mode #spotlightImg {
+      position: absolute;
+      margin: 0;
+      max-width: none;
+      max-height: none;
+      border-radius: 0;
+      animation: none !important;
+      object-fit: cover;
+    }
     .spotlight.enter #spotlightImg {
-      animation: spotlightEnter 620ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+      animation: spotlightPopIn 640ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
     }
     .spotlight.exit #spotlightImg {
       animation: spotlightExit 580ms cubic-bezier(0.4, 0, 0.2, 1) forwards;
+    }
+    @keyframes spotlightPopIn {
+      0% {
+        opacity: 0;
+        transform: scale(0);
+      }
+      68% {
+        opacity: 1;
+        transform: scale(1.2);
+      }
+      100% {
+        opacity: 1;
+        transform: scale(1);
+      }
     }
     @keyframes spotlightEnter {
       0% {
@@ -331,7 +370,7 @@ HTML_PAGE = """<!doctype html>
       display: block;
       margin: 0;
       padding: 0;
-      border: none;
+      border: 2px solid rgba(255, 255, 255, 0.9);
       outline: none;
       width: 0;
       height: 0;
@@ -389,13 +428,19 @@ HTML_PAGE = """<!doctype html>
     let spotlightBusyUntil = 0;
     let spotlightPumpTimer = null;
     let currentSpotlightSrc = null;
-    const SPOTLIGHT_GAP_MS_DEFAULT = 1500;
+    let spotlightFlyAnim = null;
+    const SPOTLIGHT_GAP_MS_DEFAULT = 1000;
+    const MOSAIC_FLY_POP_MS = 640;
+    const MOSAIC_FLY_HOLD_MS_DEFAULT = 1250;
+    const MOSAIC_FLY_DURATION_MS = 720;
+    const MOSAIC_FLY_LOCK_MS = 200;
+    const EASE_MOSAIC_FLY = "cubic-bezier(0.25, 1, 0.5, 1)";
 
     let settings = {
-      animation_mode: "staggered_grid_cascade",
+      animation_mode: "mosaic_fly_in",
       animation_intensity: "medio",
       tile_interval_ms: 360,
-      spotlight_min_gap_ms: 1500,
+      spotlight_min_gap_ms: 1000,
       duplicate_fill: false,
       mosaic_fullscreen: true,
       tile_size_px: 56,
@@ -479,23 +524,26 @@ HTML_PAGE = """<!doctype html>
       return sortImageUrls(urls || []).map(mosaicTileKey).join("\\0");
     }
 
-    function systemBusy() {
+    /* Nao inclui destaque: o poll /api/mosaic/delta deve seguir com foto em voo. */
+    function mosaicHeavyBusy() {
       return (
         syncApplyLock
         || firstSyncPending
+        || bulkAppendTimer !== null
         || activeTileAnims > 0
         || tileAnimWaitQueue.length > 0
-        || spotlightActive
-        || spotlightQueue.length > 0
-        || (feederRunning && pendingQueue.length > 0)
       );
+    }
+
+    function systemBusy() {
+      return mosaicHeavyBusy();
     }
 
     function scheduleDupSync(images) {
       if (dupSyncTimer) clearTimeout(dupSyncTimer);
       dupSyncTimer = setTimeout(function() {
         dupSyncTimer = null;
-        if (syncApplyLock || systemBusy()) {
+        if (mosaicHeavyBusy()) {
           scheduleDupSync(images);
           return;
         }
@@ -572,7 +620,7 @@ HTML_PAGE = """<!doctype html>
       overlayRescanPending = requestAnimationFrame(function() {
         overlayRescanPending = requestAnimationFrame(function() {
           overlayRescanPending = 0;
-          if (systemBusy() && activeTileAnims > 0) {
+          if (mosaicHeavyBusy() && activeTileAnims > 0) {
             setTimeout(scheduleOverlayRescan, 180);
             return;
           }
@@ -1140,6 +1188,11 @@ HTML_PAGE = """<!doctype html>
 
     function runTileEntryAnimation(img, cellIndex, onDone) {
       const tileNode = img.closest ? img.closest(".tile") : null;
+      if (usesMosaicFlyIn()) {
+        if (onDone) onDone();
+        else finishTileEntryAnimation(img, tileNode);
+        return;
+      }
       const prof = intensityProfile();
       const entryMs = prof.entry;
       /* Uma animacao por vez: a onda vem da fila em ordem de celula, sem delay CSS extra. */
@@ -1151,7 +1204,7 @@ HTML_PAGE = """<!doctype html>
       img.style.setProperty("--entry-delay", delayMs + "ms");
       applyChunkEntryMotionVars(img, cellIndex);
       requestAnimationFrame(function() {
-        img.classList.add("anim-staggered_grid_cascade");
+        img.classList.add(tileEntryAnimClass());
       });
       if (!onDone) {
         const cleanupOnly = function() {
@@ -1189,7 +1242,36 @@ HTML_PAGE = """<!doctype html>
     }
 
     function modeKey() {
-      return "staggered_grid_cascade";
+      const m = String(settings.animation_mode || "mosaic_fly_in").trim().toLowerCase();
+      return m || "mosaic_fly_in";
+    }
+
+    function usesMosaicFlyIn() {
+      return modeKey() === "mosaic_fly_in";
+    }
+
+    function usesClassicSpotlight() {
+      const m = modeKey();
+      return (
+        m === "staggered_grid_cascade"
+        || m === "hero_spotlight_pulse"
+        || m === "soft_zoom_fade"
+      );
+    }
+
+    function tileEntryAnimClass() {
+      const map = {
+        soft_zoom_fade: "anim-soft_zoom_fade",
+        hero_spotlight_pulse: "anim-hero_spotlight_pulse",
+        staggered_grid_cascade: "anim-staggered_grid_cascade",
+        pure_fade_mosaic: "anim-pure_fade_mosaic",
+      };
+      return map[modeKey()] || "anim-staggered_grid_cascade";
+    }
+
+    function mosaicFlyHoldMs() {
+      const prof = intensityProfile();
+      return Math.max(1000, Math.min(1500, prof.spotlightExit));
     }
 
     function imageOrderKey(src) {
@@ -1218,7 +1300,296 @@ HTML_PAGE = """<!doctype html>
       return spotlightActive || spotlightQueue.length > 0 || Date.now() < spotlightBusyUntil;
     }
 
+    function clearSpotlightTimers() {
+      if (spotlightTimer) {
+        clearTimeout(spotlightTimer);
+        spotlightTimer = null;
+      }
+      if (spotlightExitTimer) {
+        clearTimeout(spotlightExitTimer);
+        spotlightExitTimer = null;
+      }
+      if (spotlightFlyAnim) {
+        try {
+          spotlightFlyAnim.cancel();
+        } catch (e) { /* ignore */ }
+        spotlightFlyAnim = null;
+      }
+    }
+
+    function cancelSpotlightFlyAnim() {
+      if (spotlightFlyAnim) {
+        try {
+          spotlightFlyAnim.cancel();
+        } catch (e) { /* ignore */ }
+        spotlightFlyAnim = null;
+      }
+      if (!spotlightImg || !spotlightImg.getAnimations) return;
+      const anims = spotlightImg.getAnimations();
+      for (let i = 0; i < anims.length; i++) {
+        try {
+          anims[i].cancel();
+        } catch (e) { /* ignore */ }
+      }
+    }
+
+    function resetSpotlightFlyInline() {
+      if (!spotlightImg) return;
+      spotlightImg.style.position = "";
+      spotlightImg.style.left = "";
+      spotlightImg.style.top = "";
+      spotlightImg.style.margin = "";
+      spotlightImg.style.maxWidth = "";
+      spotlightImg.style.maxHeight = "";
+      spotlightImg.style.transform = "";
+      spotlightImg.style.objectFit = "";
+      spotlight.classList.remove("fly-mode");
+    }
+
+    function applyHeroRectInSpotlight(rect) {
+      if (!spotlightImg || !rect) return;
+      spotlightImg.style.position = "absolute";
+      spotlightImg.style.left = rect.x + "px";
+      spotlightImg.style.top = rect.y + "px";
+      spotlightImg.style.width = Math.max(1, rect.w) + "px";
+      spotlightImg.style.height = Math.max(1, rect.h) + "px";
+      spotlightImg.style.margin = "0";
+      spotlightImg.style.maxWidth = "none";
+      spotlightImg.style.maxHeight = "none";
+      spotlightImg.style.transform = "none";
+    }
+
+    function lockTileAfterFly(src) {
+      const node = srcToNode.get(mosaicTileKey(src));
+      if (!node) return false;
+      node.classList.remove("tile-waiting-spotlight");
+      node.classList.add("tile-in-mosaic");
+      delete node.dataset.deferEntryAnim;
+      const img = node.querySelector(".tile-photo");
+      if (img) {
+        img.style.opacity = "";
+        clearTileEntryClasses(img);
+        node.classList.remove("tile-animating");
+      }
+      node.classList.add("tile-lock-flash");
+      setTimeout(function() {
+        if (node.isConnected) node.classList.remove("tile-lock-flash");
+      }, MOSAIC_FLY_LOCK_MS + 40);
+      requestAnimationFrame(function() {
+        revealTileCellOnLogo(node);
+      });
+      return true;
+    }
+
+    function hideSpotlightHero() {
+      if (!spotlight) return;
+      cancelSpotlightFlyAnim();
+      spotlight.classList.remove("show", "enter", "exit", "fly-mode");
+      if (spotlightImg) {
+        spotlightImg.classList.remove("spotlight-ready");
+        spotlightImg.removeAttribute("src");
+        spotlightImg.style.opacity = "0";
+        spotlightImg.style.width = "0";
+        spotlightImg.style.height = "0";
+        resetSpotlightFlyInline();
+      }
+    }
+
+    function beginMosaicFlyToCell() {
+      const src = currentSpotlightSrc;
+      if (!src || !spotlightImg) {
+        finishSpotlightCycle();
+        return;
+      }
+      const node = srcToNode.get(mosaicTileKey(src));
+      const target = node ? elementRectInShell(node) : null;
+      if (!node || !target) {
+        hideSpotlightHero();
+        finishSpotlightCycle();
+        return;
+      }
+
+      cancelSpotlightFlyAnim();
+      spotlight.classList.remove("enter", "exit");
+      const nw = Number(spotlightImg.dataset.heroNw) || 0;
+      const nh = Number(spotlightImg.dataset.heroNh) || 0;
+      if (nw > 0 && nh > 0) fitSpotlightSize(nw, nh);
+      void spotlightImg.offsetWidth;
+
+      let from = elementRectInShell(spotlightImg);
+      if (!from || from.w < 64 || from.h < 64) {
+        if (nw > 0 && nh > 0) fitSpotlightSize(nw, nh);
+        void spotlightImg.offsetWidth;
+        from = elementRectInShell(spotlightImg);
+      }
+      if (!from) {
+        hideSpotlightHero();
+        finishSpotlightCycle();
+        return;
+      }
+
+      spotlight.classList.add("fly-mode");
+      spotlightImg.style.opacity = "1";
+      applyHeroRectInSpotlight(from);
+      spotlightImg.style.objectFit = "cover";
+
+      let finished = false;
+      const completeFly = function() {
+        if (finished) return;
+        finished = true;
+        cancelSpotlightFlyAnim();
+        const locked = lockTileAfterFly(src);
+        hideSpotlightHero();
+        finishSpotlightCycle({ locked: locked });
+      };
+
+      const keyframes = [
+        {
+          left: from.x + "px",
+          top: from.y + "px",
+          width: Math.max(1, from.w) + "px",
+          height: Math.max(1, from.h) + "px",
+          opacity: 1,
+        },
+        {
+          left: target.x + "px",
+          top: target.y + "px",
+          width: Math.max(1, target.w) + "px",
+          height: Math.max(1, target.h) + "px",
+          opacity: 1,
+        },
+      ];
+
+      try {
+        spotlightFlyAnim = spotlightImg.animate(keyframes, {
+          duration: MOSAIC_FLY_DURATION_MS,
+          easing: EASE_MOSAIC_FLY,
+          fill: "forwards",
+        });
+        spotlightFlyAnim.onfinish = completeFly;
+        spotlightFlyAnim.oncancel = completeFly;
+      } catch (e) {
+        completeFly();
+      }
+      setTimeout(completeFly, MOSAIC_FLY_DURATION_MS + 150);
+    }
+
+    function revealSpotlightFlyIn() {
+      clearSpotlightTimers();
+      spotlightActive = true;
+      const holdMs = mosaicFlyHoldMs();
+      const nw = Number(spotlightImg.dataset.heroNw) || 0;
+      const nh = Number(spotlightImg.dataset.heroNh) || 0;
+      if (!spotlightImg.src || nw < 1 || nh < 1) {
+        hideSpotlightHero();
+        finishSpotlightCycle();
+        return;
+      }
+      resetSpotlightFlyInline();
+      if (nw > 0 && nh > 0) fitSpotlightSize(nw, nh);
+
+      spotlightImg.classList.add("spotlight-ready");
+      spotlightImg.style.opacity = "1";
+      spotlight.classList.remove("exit", "fly-mode");
+      spotlight.classList.add("show", "enter");
+      grid.classList.add("focused");
+      cancelOverlayRevealTrack();
+
+      setTimeout(function() {
+        spotlight.classList.remove("enter");
+        if (spotlightImg) spotlightImg.style.transform = "none";
+      }, MOSAIC_FLY_POP_MS);
+
+      spotlightExitTimer = setTimeout(function() {
+        grid.classList.remove("focused");
+        beginMosaicFlyToCell();
+      }, MOSAIC_FLY_POP_MS + holdMs);
+
+      spotlightTimer = setTimeout(function() {
+        if (spotlightActive && currentSpotlightSrc) {
+          hideSpotlightHero();
+          finishSpotlightCycle();
+        }
+      }, MOSAIC_FLY_POP_MS + holdMs + MOSAIC_FLY_DURATION_MS + MOSAIC_FLY_LOCK_MS + 600);
+    }
+
+    function revealSpotlightClassic() {
+      const prof = intensityProfile();
+      const exitCardMs = 560;
+      const settleMs = 140;
+      const hideAt = prof.spotlightExit + exitCardMs + settleMs;
+
+      spotlightActive = true;
+      spotlightImg.classList.add("spotlight-ready");
+      spotlight.classList.remove("exit", "fly-mode");
+      resetSpotlightFlyInline();
+      spotlight.classList.add("show", "enter");
+      grid.classList.add("focused");
+      cancelOverlayRevealTrack();
+
+      setTimeout(function() {
+        spotlight.classList.remove("enter");
+      }, 560);
+      spotlightExitTimer = setTimeout(function() {
+        spotlight.classList.add("exit");
+        spotlightImg.classList.remove("spotlight-ready");
+        grid.classList.remove("focused");
+      }, prof.spotlightExit);
+      spotlightTimer = setTimeout(function() {
+        spotlight.classList.remove("exit", "show");
+        spotlightImg.removeAttribute("src");
+        spotlightImg.style.width = "0";
+        spotlightImg.style.height = "0";
+        spotlightImg.classList.remove("spotlight-ready");
+        finishSpotlightCycle();
+      }, hideAt);
+    }
+
+    function hydrateCatalogWithoutSpotlight(images) {
+      const ordered = sortImageUrls(images || []);
+      let cell = 0;
+      for (const src of ordered) {
+        const key = mosaicTileKey(src);
+        if (renderedSet.has(key)) continue;
+        appendTileAt(src, false, cell);
+        cell += 1;
+      }
+      gridCursor = Math.max(gridCursor, cell);
+      firstSyncDone = true;
+      firstSyncPending = false;
+      if (overlayCurrent) scheduleOverlayRescan();
+    }
+
+    /* Fly-in: catalogo grande = grelha instantanea; poucas fotos = fila com destaque/voo. */
+    function bootstrapFlyInCatalog(images) {
+      const ordered = sortImageUrls(images || []);
+      if (!ordered.length) {
+        firstSyncDone = true;
+        firstSyncPending = false;
+        return;
+      }
+      const FLY_IN_HYDRATE_THRESHOLD = 12;
+      if (ordered.length > FLY_IN_HYDRATE_THRESHOLD) {
+        hydrateCatalogWithoutSpotlight(ordered);
+        return;
+      }
+      enqueueNewImages(ordered);
+      firstSyncDone = true;
+      firstSyncPending = false;
+      startFeederIfNeeded();
+    }
+
     function spotlightCycleMs() {
+      if (usesMosaicFlyIn()) {
+        return (
+          MOSAIC_FLY_POP_MS
+          + mosaicFlyHoldMs()
+          + MOSAIC_FLY_DURATION_MS
+          + MOSAIC_FLY_LOCK_MS
+          + 120
+          + spotlightGapMs()
+        );
+      }
       const prof = intensityProfile();
       return prof.spotlightExit + 560 + 140 + spotlightGapMs();
     }
@@ -1242,7 +1613,7 @@ HTML_PAGE = """<!doctype html>
     }
 
     function spotlightSrc(url) {
-      return mosaicTileKey(url);
+      return url ? String(url) : "";
     }
 
     function refreshTileImageUrls(images) {
@@ -1256,17 +1627,20 @@ HTML_PAGE = """<!doctype html>
     }
 
     function fitSpotlightSize(naturalW, naturalH) {
+      if (!spotlightImg) return;
       const sw = telaoShell ? telaoShell.clientWidth : window.innerWidth;
       const sh = telaoShell ? telaoShell.clientHeight : window.innerHeight;
-      const maxW = Math.min(sw * 0.75, 560);
-      const maxH = Math.min(sh * 0.85, 680);
-      let w = Math.max(1, naturalW);
-      let h = Math.max(1, naturalH);
-      const scale = Math.min(1, maxW / w, maxH / h);
-      w = Math.round(w * scale);
-      h = Math.round(h * scale);
+      const maxW = Math.min(sw * 0.76, 680);
+      const maxH = Math.min(sh * 0.76, 780);
+      let w = Math.max(1, Number(naturalW) || 1);
+      let h = Math.max(1, Number(naturalH) || 1);
+      const scale = Math.min(maxW / w, maxH / h);
+      w = Math.max(48, Math.round(w * scale));
+      h = Math.max(48, Math.round(h * scale));
+      resetSpotlightFlyInline();
       spotlightImg.style.width = w + "px";
       spotlightImg.style.height = h + "px";
+      spotlightImg.style.objectFit = "contain";
     }
 
     function spotlightGapMs() {
@@ -1279,6 +1653,10 @@ HTML_PAGE = """<!doctype html>
     function setTileInMosaic(src) {
       const node = srcToNode.get(mosaicTileKey(src));
       if (!node) return;
+      if (usesMosaicFlyIn()) {
+        lockTileAfterFly(src);
+        return;
+      }
       node.classList.remove("tile-waiting-spotlight");
       node.classList.add("tile-in-mosaic");
       node.dataset.deferEntryAnim = "1";
@@ -1290,15 +1668,24 @@ HTML_PAGE = """<!doctype html>
       startTileEntryAnimIfNeeded(node, finish);
     }
 
-    function finishSpotlightCycle() {
-      cancelOverlayRevealTrack();
-      if (currentSpotlightSrc) {
-        setTileInMosaic(currentSpotlightSrc);
-        currentSpotlightSrc = null;
+    function finishSpotlightCycle(opts) {
+      if (!spotlightActive && !(opts && opts.locked)) {
+        if (currentSpotlightSrc) {
+          setTileInMosaic(currentSpotlightSrc);
+          currentSpotlightSrc = null;
+        }
+        pumpSpotlightQueue();
+        continueFeederAfterSpotlight();
+        return;
       }
+      const alreadyLocked = opts && opts.locked;
+      clearSpotlightTimers();
+      cancelOverlayRevealTrack();
       spotlightActive = false;
-      spotlightTimer = null;
-      spotlightExitTimer = null;
+      if (!alreadyLocked && currentSpotlightSrc) {
+        setTileInMosaic(currentSpotlightSrc);
+      }
+      currentSpotlightSrc = null;
       spotlightBusyUntil = Date.now() + spotlightGapMs();
       if (overlayRevealIsActive()) redrawOverlay();
       pumpSpotlightQueue();
@@ -1306,36 +1693,11 @@ HTML_PAGE = """<!doctype html>
     }
 
     function revealSpotlightUI() {
-      const prof = intensityProfile();
-      const exitCardMs = 560;
-      const settleMs = 140;
-      const hideAt = prof.spotlightExit + exitCardMs + settleMs;
-
-      spotlightActive = true;
-      spotlightImg.classList.add("spotlight-ready");
-      spotlight.classList.remove("exit");
-      spotlight.classList.remove("enter");
-      spotlight.classList.add("show");
-      spotlight.classList.add("enter");
-      grid.classList.add("focused");
-      cancelOverlayRevealTrack();
-      /* Mantém overlay já revelado visível — não limpar nem esconder no spotlight. */
-
-      setTimeout(() => spotlight.classList.remove("enter"), 560);
-      spotlightExitTimer = setTimeout(() => {
-        spotlight.classList.add("exit");
-        spotlightImg.classList.remove("spotlight-ready");
-        grid.classList.remove("focused");
-      }, prof.spotlightExit);
-      spotlightTimer = setTimeout(() => {
-        spotlight.classList.remove("exit");
-        spotlight.classList.remove("show");
-        spotlightImg.removeAttribute("src");
-        spotlightImg.style.width = "0";
-        spotlightImg.style.height = "0";
-        spotlightImg.classList.remove("spotlight-ready");
-        finishSpotlightCycle();
-      }, hideAt);
+      if (usesMosaicFlyIn()) {
+        revealSpotlightFlyIn();
+      } else {
+        revealSpotlightClassic();
+      }
     }
 
     function pumpSpotlightQueue() {
@@ -1356,41 +1718,55 @@ HTML_PAGE = """<!doctype html>
 
     function scheduleSpotlight(src) {
       if (!shouldShowSpotlight() || !src) return;
+      const key = mosaicTileKey(src);
+      if (currentSpotlightSrc && mosaicTileKey(currentSpotlightSrc) === key) return;
+      for (let i = 0; i < spotlightQueue.length; i++) {
+        if (mosaicTileKey(spotlightQueue[i]) === key) return;
+      }
       spotlightQueue.push(src);
       pumpSpotlightQueue();
     }
 
     function showSpotlightNow(src) {
       const url = spotlightSrc(src);
-      if (!url || !spotlightImg || spotlightActive) {
+      if (!url || !spotlightImg) {
         if (src) spotlightQueue.unshift(src);
+        return;
+      }
+      if (spotlightActive) {
+        scheduleSpotlight(src);
         return;
       }
 
       currentSpotlightSrc = src;
       spotlightProbe = null;
+      cancelSpotlightFlyAnim();
+      resetSpotlightFlyInline();
       spotlightImg.classList.remove("spotlight-ready");
       spotlightImg.style.opacity = "0";
       spotlightImg.removeAttribute("src");
       spotlightImg.style.width = "0";
       spotlightImg.style.height = "0";
+      delete spotlightImg.dataset.heroNw;
+      delete spotlightImg.dataset.heroNh;
 
       const probe = new Image();
       spotlightProbe = probe;
       probe.onload = function() {
-        if (spotlightProbe !== probe) return;
+        if (spotlightProbe !== probe || currentSpotlightSrc !== src) return;
+        spotlightImg.dataset.heroNw = String(probe.naturalWidth);
+        spotlightImg.dataset.heroNh = String(probe.naturalHeight);
         fitSpotlightSize(probe.naturalWidth, probe.naturalHeight);
         spotlightImg.src = url;
         spotlightImg.style.opacity = "1";
         revealSpotlightUI();
       };
       probe.onerror = function() {
-        if (spotlightProbe !== probe) return;
+        if (spotlightProbe !== probe || currentSpotlightSrc !== src) return;
+        spotlightImg.dataset.heroNw = "1200";
+        spotlightImg.dataset.heroNh = "1600";
+        fitSpotlightSize(1200, 1600);
         spotlightImg.src = url;
-        spotlightImg.style.width = "";
-        spotlightImg.style.height = "";
-        spotlightImg.style.maxWidth = "min(58vw, 560px)";
-        spotlightImg.style.maxHeight = "min(72vh, 680px)";
         spotlightImg.style.opacity = "1";
         revealSpotlightUI();
       };
@@ -1402,8 +1778,7 @@ HTML_PAGE = """<!doctype html>
     }
 
     function shouldShowSpotlight() {
-      const m = modeKey();
-      return m === "soft_zoom_fade" || m === "hero_spotlight_pulse" || m === "staggered_grid_cascade";
+      return usesMosaicFlyIn() || usesClassicSpotlight();
     }
 
     function enqueueNewImages(images) {
@@ -1421,6 +1796,7 @@ HTML_PAGE = """<!doctype html>
         health.tilesEnqueued += added;
         sortPendingQueue();
         startFeederIfNeeded();
+        scheduleTick(140);
       }
       return added;
     }
@@ -1485,10 +1861,24 @@ HTML_PAGE = """<!doctype html>
       img.decoding = "async";
       if ("fetchPriority" in img) img.fetchPriority = lazyLoad ? "low" : "auto";
       img.alt = "";
-      img.src = src;
+      let loadAttempts = 0;
+      const maxLoadAttempts = 4;
+      function assignTileSrc() {
+        const sep = src.indexOf("?") >= 0 ? "&" : "?";
+        const bust = loadAttempts > 0
+          ? sep + "_r=" + loadAttempts + "&_t=" + Date.now()
+          : "";
+        img.src = src + bust;
+      }
       img.onerror = function() {
+        loadAttempts += 1;
+        if (loadAttempts < maxLoadAttempts) {
+          setTimeout(assignTileSrc, 120 * loadAttempts);
+          return;
+        }
         removeStaleTile(mosaicTileKey(src));
       };
+      assignTileSrc();
       d.appendChild(img);
       return d;
     }
@@ -1519,9 +1909,11 @@ HTML_PAGE = """<!doctype html>
       if (renderedSet.has(key)) return;
       const d = createTile(src, animated, false, cellIndex);
       grid.appendChild(d);
-      startTileEntryAnimIfNeeded(d, function() {
-        onTilePlaced(d, 0);
-      });
+      if (!(animated && shouldShowSpotlight())) {
+        startTileEntryAnimIfNeeded(d, function() {
+          onTilePlaced(d, 0);
+        });
+      }
       renderedSet.add(key);
       srcToNode.set(key, d);
     }
@@ -1751,9 +2143,13 @@ HTML_PAGE = """<!doctype html>
       pruneTilesNotInList(images);
       if (!firstSyncDone) {
         if (firstSyncPending) return;
-        enqueueNewImages(images);
-        firstSyncDone = true;
-        startFeederIfNeeded();
+        if (usesMosaicFlyIn()) {
+          bootstrapFlyInCatalog(images);
+        } else {
+          enqueueNewImages(images);
+          firstSyncDone = true;
+          startFeederIfNeeded();
+        }
         return;
       }
       enqueueNewImages(images);
@@ -1839,12 +2235,17 @@ HTML_PAGE = """<!doctype html>
           syncQueueFromServer(known);
         } else if (!firstSyncDone) {
           if (!firstSyncPending) {
-            enqueueNewImages(known);
-            firstSyncDone = true;
-            startFeederIfNeeded();
+            if (usesMosaicFlyIn()) {
+              bootstrapFlyInCatalog(known);
+            } else {
+              enqueueNewImages(known);
+              firstSyncDone = true;
+              startFeederIfNeeded();
+            }
           }
         } else {
-          enqueueNewImages(addedUrls);
+          const n = enqueueNewImages(addedUrls);
+          if (n > 0) scheduleTick(160);
         }
       } else if (
         !firstSyncDone &&
@@ -1853,19 +2254,18 @@ HTML_PAGE = """<!doctype html>
         renderedSet.size === 0 &&
         !feederRunning
       ) {
-        enqueueNewImages(known);
-        firstSyncDone = true;
-        startFeederIfNeeded();
+        if (usesMosaicFlyIn()) {
+          bootstrapFlyInCatalog(known);
+        } else {
+          enqueueNewImages(known);
+          firstSyncDone = true;
+          startFeederIfNeeded();
+        }
       }
     }
 
     async function tick() {
       if (tickBusy) return;
-      if (systemBusy()) {
-        health.tickSkipped += 1;
-        scheduleTick(Math.max(tickBackoffMs, 900));
-        return;
-      }
       tickBusy = true;
       health.ticks += 1;
       try {
@@ -1909,7 +2309,7 @@ HTML_PAGE = """<!doctype html>
         applyMosaicDelta(data);
         lastMosaicGen = Number(data.mosaic_generation) || 0;
         lastDeltaGen = lastMosaicGen;
-        tickBackoffMs = systemBusy() ? 900 : 500;
+        tickBackoffMs = spotlightPipelineBusy() ? 320 : 420;
       } catch (e) {
         health.tickErrors += 1;
         tickBackoffMs = Math.min(4000, tickBackoffMs + 400);
@@ -1949,6 +2349,13 @@ HTML_PAGE = """<!doctype html>
       console.error("Mosaico front promise:", ev.reason);
     });
 
+    if (spotlight) {
+      spotlight.classList.remove("show", "enter", "exit");
+    }
+    spotlightActive = false;
+    currentSpotlightSrc = null;
+    spotlightQueue.length = 0;
+
     loadOverlayArt("");
     applyGridLayout();
     scheduleTick(0);
@@ -1958,8 +2365,6 @@ HTML_PAGE = """<!doctype html>
     setInterval(function() {
       if (!tickBusy) scheduleTick(tickBackoffMs);
     }, 600);
-    setInterval(cycleSpotlight, 14000);
-
     function relayoutOverlayReveal() {
       scheduleOverlayRescan();
     }
@@ -1973,7 +2378,7 @@ HTML_PAGE = """<!doctype html>
         const changed = applyGridLayout();
         if (changed) relayoutOverlayReveal();
         else if (overlayRevealIsActive()) redrawOverlay();
-        if (settings.duplicate_fill && !systemBusy()) {
+        if (settings.duplicate_fill && !mosaicHeavyBusy()) {
           scheduleDupSync(known.slice());
         }
       }, 280);
@@ -2139,7 +2544,7 @@ class SimpleMosaicFrontend:
         self.overlay_path: Path | None = None
 
         # Configs sincronizadas com a interface principal.
-        self.animation_mode: str = "staggered_grid_cascade"
+        self.animation_mode: str = "mosaic_fly_in"
         self.animation_intensity: str = "medio"
         self.tile_interval_ms: int = 360
         self.tile_size_px: int = 48
@@ -2521,21 +2926,20 @@ class SimpleMosaicFrontend:
         overlay_path: str | None = None,
         backdrop_path: str | None = None,
         background_path: str | None = None,
+        open_browser: bool = True,
     ):
         self.set_backdrop_path(backdrop_path, background_path=background_path)
         self.set_overlay_path(overlay_path)
 
-        if self._is_running:
-            return
+        if not self._is_running:
+            handler = type("DynamicFrontendHandler", (_FrontendHandler,), {})
+            handler.server_ref = self
+            self._httpd = ThreadingHTTPServer((self.host, self.port), handler)
+            self._thread = threading.Thread(target=self._httpd.serve_forever, daemon=True)
+            self._thread.start()
+            self._is_running = True
 
-        handler = type("DynamicFrontendHandler", (_FrontendHandler,), {})
-        handler.server_ref = self
-        self._httpd = ThreadingHTTPServer((self.host, self.port), handler)
-        self._thread = threading.Thread(target=self._httpd.serve_forever, daemon=True)
-        self._thread.start()
-        self._is_running = True
-
-        if not self._opened_once:
+        if open_browser and not self._opened_once:
             webbrowser.open(f"http://{self.host}:{self.port}", new=1)
             self._opened_once = True
 

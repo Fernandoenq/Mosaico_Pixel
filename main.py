@@ -44,7 +44,7 @@ class GaleriaMonitorApp:
         self.celula_var = tk.IntVar(value=90)
         # Espaço entre cada foto no painel ao vivo (ms) — evita travar a UI com rajadas.
         self.intervalo_mosaico_ms_var = tk.IntVar(value=360)
-        self.animacao_var = tk.StringVar(value="Staggered Grid Cascade")
+        self.animacao_var = tk.StringVar(value="Mosaic Fly-In")
         self.intensidade_animacao_var = tk.StringVar(value="Medio")
         # Navegador / gravacao: pastilha maior = menos celulas (~100-150 em Full HD com ~120 px).
         self.navegador_pastilha_px_var = tk.IntVar(value=56)
@@ -104,6 +104,7 @@ class GaleriaMonitorApp:
         self._registrar_bindings()
         self._atualizar_resumo()
         self._sincronizar_frontend_web()
+        self._iniciar_servidor_web(silent=True)
         self._poll_logs()
         self._auto_reload_tick()
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
@@ -341,6 +342,7 @@ class GaleriaMonitorApp:
             anim_row,
             textvariable=self.animacao_var,
             values=(
+                "Mosaic Fly-In",
                 "Soft Zoom Fade-In",
                 "Hero Spotlight Pulse",
                 "Staggered Grid Cascade",
@@ -540,6 +542,18 @@ class GaleriaMonitorApp:
         except Exception:
             pass
 
+    def _iniciar_servidor_web(self, silent: bool = False) -> None:
+        """Sobe o HTTP do telao cedo para o refresh do browser nao ficar preto."""
+        try:
+            self._sincronizar_frontend_web()
+            self.web_frontend.start(
+                backdrop_path=self._backdrop_path_efetivo(),
+                overlay_path=self._overlay_path_efetivo(),
+                open_browser=not silent,
+            )
+        except Exception:
+            pass
+
     def _sync_backdrop_painel_ao_vivo(self) -> None:
         if self.live_panel is None:
             return
@@ -637,12 +651,13 @@ class GaleriaMonitorApp:
     @staticmethod
     def _animation_mode_key(label: str) -> str:
         mapa = {
+            "Mosaic Fly-In": "mosaic_fly_in",
             "Soft Zoom Fade-In": "soft_zoom_fade",
             "Hero Spotlight Pulse": "hero_spotlight_pulse",
             "Staggered Grid Cascade": "staggered_grid_cascade",
             "Pure Fade Mosaic": "pure_fade_mosaic",
         }
-        return mapa.get((label or "").strip(), "soft_zoom_fade")
+        return mapa.get((label or "").strip(), "mosaic_fly_in")
 
     def _painel_ativo(self):
         return (
@@ -1132,6 +1147,7 @@ class GaleriaMonitorApp:
         self.stop_event = threading.Event()
         self._mosaic_cancel_feeder()
         self._mosaic_drain_pending()
+        self._sincronizar_frontend_web()
         self.btn_iniciar.config(state="disabled")
         self.btn_parar.config(state="normal")
         self.status_var.set("Status: Iniciando...")
@@ -1144,11 +1160,7 @@ class GaleriaMonitorApp:
             pausa_mon_s = 2.0
         renomear_ale = bool(self.renomear_entrada_aleatoria_var.get())
         try:
-            self._sincronizar_frontend_web()
-            self.web_frontend.start(
-                backdrop_path=self._backdrop_path_efetivo(),
-                overlay_path=self._overlay_path_efetivo(),
-            )
+            self._iniciar_servidor_web(silent=False)
         except Exception as exc:
             self.log_var.set(f"Falha ao iniciar front web: {exc}")
         if self.painel_ao_vivo_var.get():
@@ -1174,6 +1186,27 @@ class GaleriaMonitorApp:
         )
         self.worker_thread.start()
 
+    def _schedule_web_mosaic_notify(self, image_path: str, attempt: int = 0) -> None:
+        """Avisa o telao web quando o JPEG em MOSAIC/ ja esta gravado (evita tile cinza/amarelo)."""
+        path = Path(image_path)
+        ready = False
+        try:
+            if path.is_file():
+                st = path.stat()
+                ready = st.st_size >= 512
+        except OSError:
+            ready = False
+        if ready or attempt >= 10:
+            try:
+                self.web_frontend.notify_mosaic_changed()
+            except Exception:
+                pass
+            return
+        try:
+            self.root.after(80, lambda: self._schedule_web_mosaic_notify(image_path, attempt + 1))
+        except tk.TclError:
+            pass
+
     def _queue_new_image(self, image_path: str):
         """Sempre na thread principal: painel ao vivo (se ativo) + sinal ao navegador."""
 
@@ -1181,10 +1214,7 @@ class GaleriaMonitorApp:
             if self.painel_ao_vivo_var.get():
                 self._mosaic_pending.put(image_path)
                 self._mosaic_try_start_feeder()
-            try:
-                self.web_frontend.notify_mosaic_changed()
-            except Exception:
-                pass
+            self._schedule_web_mosaic_notify(image_path)
 
         try:
             self.root.after(0, apply)
