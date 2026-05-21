@@ -74,6 +74,11 @@ DELAY_ENTRE_ONDAS = 0.8  # Segundos de delay entre início de cada onda (sobrepo
 DURACAO_PAUSA_MEIO = 7  # 4s fade Máscara1→Máscara2 + 3s mantém Máscara2 (vídeo termina na Máscara2)
 TRANSPARENCIA_MASCARA = 0.85  # Transparência da máscara aplicada em cada foto (0.0 = invisível, 1.0 = opaca)
 OPACIDADE_FOTO_ENCAIXADA = 0.55  # Opacidade das fotos após encaixarem no mosaico
+COR_FUNDO_MOSAICO = np.array([244, 200, 102], dtype=np.float32)  # #f4c866
+FEATHER_TRANSICAO_CELULAS = 4  # Linhas de células com blend suave na borda foto/amarelo
+TOLERANCIA_AMARELO_DIST = 50.0  # Distância RGB (0–255) para contar pixel como #f4c866
+LIMIAR_SALTO_AMARELO = 0.06  # Gradiente mínimo em frac_amarelo por linha para confiar no salto
+FRACAO_TOPO_IGNORADA = 0.28  # Ignora arco/topo ao procurar a transição
 
 # Configurações de destaque e variação de tamanho (compartilhadas)
 # NUM_FOTOS_GIGANTES = 100  # [COMENTADO] Número mínimo de fotos que aparecem GIGANTES na tela
@@ -168,6 +173,198 @@ def aplicar_mascara_na_foto(foto, regiao_mascara, alpha):
     foto_float = foto.astype(np.float32) / 255.0
     resultado = foto_float * (1 - alpha) + regiao_mascara * alpha
     return (resultado * 255).astype(np.uint8)
+
+
+def frame_cor_fundo(largura, altura):
+    """Fundo plano #f4c866 (fallback se máscara não carregar)."""
+    frame = np.ones((altura, largura, 3), dtype=np.uint8)
+    frame[:, :] = [244, 200, 102]
+    return frame
+
+
+def mascara_float_para_frame(mascara_float):
+    """Converte máscara 0..1 para frame RGB uint8 (camada base do vídeo)."""
+    if mascara_float is None:
+        return None
+    return (np.clip(mascara_float, 0.0, 1.0) * 255.0).astype(np.uint8)
+
+
+def misturar_mascaras_float(mascara_a, mascara_b, t):
+    """Interpola duas máscaras completas (t=0 → a, t=1 → b)."""
+    if mascara_a is None and mascara_b is None:
+        return None
+    if mascara_a is None:
+        return mascara_b
+    if mascara_b is None:
+        return mascara_a
+    t = max(0.0, min(1.0, float(t)))
+    return mascara_a * (1.0 - t) + mascara_b * t
+
+
+def _mascara_para_rgb_uint8(mascara_float):
+    """Máscara float 0..1 ou uint8 → RGB uint8 para análise de linhas."""
+    if mascara_float is None:
+        return None
+    if mascara_float.dtype != np.uint8:
+        if float(np.max(mascara_float)) <= 1.01:
+            return (np.clip(mascara_float, 0.0, 1.0) * 255.0).astype(np.uint8)
+        return np.clip(mascara_float, 0, 255).astype(np.uint8)
+    return mascara_float
+
+
+def detectar_y_transicao_grade(
+    mascara_float,
+    altura_celula,
+    *,
+    offset_celulas=0,
+    tolerancia_dist=None,
+):
+    """
+    Detecta o início da zona amarela/logo na máscara (fim do mosaico fotográfico)
+    e alinha à grelha. Usa o maior salto de pixels #f4c866 no terço inferior da arte,
+    para não confundir barras da logo com rodapé plano nem cortar cedo demais.
+    """
+    if mascara_float is None or altura_celula < 1:
+        return None
+    im = _mascara_para_rgb_uint8(mascara_float)
+    if im is None:
+        return None
+    h = im.shape[0]
+    if h < altura_celula * 2:
+        return altura_celula
+
+    cor = np.array([244, 200, 102], dtype=np.float32)
+    tol = TOLERANCIA_AMARELO_DIST if tolerancia_dist is None else float(tolerancia_dist)
+    diff = np.linalg.norm(im.astype(np.float32) - cor, axis=2)
+    frac_amarelo = (diff < tol).mean(axis=1)
+
+    gray = cv2.cvtColor(im, cv2.COLOR_RGB2GRAY)
+    textura = np.abs(cv2.Laplacian(gray, cv2.CV_64F)).mean(axis=1)
+
+    y_min = int(h * FRACAO_TOPO_IGNORADA)
+    grad = np.diff(frac_amarelo)
+    if y_min >= len(grad):
+        y_jump = h // 2
+        forca_salto = 0.0
+    else:
+        rel = int(np.argmax(grad[y_min:]))
+        y_jump = y_min + rel + 1
+        forca_salto = float(grad[y_jump - 1]) if y_jump > 0 else 0.0
+
+    y_ref = y_jump
+    scan_lo = max(y_min, y_jump - altura_celula * 8)
+    for y in range(y_jump, scan_lo - 1, -1):
+        if textura[y] > 14.0 and frac_amarelo[y] < 0.45:
+            y_ref = y + 1
+            break
+
+    if forca_salto >= LIMIAR_SALTO_AMARELO:
+        y_topo = y_jump
+    else:
+        y_topo = y_ref
+
+    y_topo += int(offset_celulas) * altura_celula
+    y_snap = int(round(y_topo / altura_celula) * altura_celula)
+    return max(altura_celula, min(y_snap, h - altura_celula))
+
+
+def peso_mascara_por_linha(y, altura_celula, y_transicao, banda_celulas=None):
+    """
+    1.0 = aplica máscara por célula (zona do arco/mosaico).
+    0.0 = só foto sobre o fundo já pintado (zona amarela — evita costura por célula).
+    """
+    if y_transicao is None:
+        return 1.0
+    if banda_celulas is None:
+        banda_celulas = FEATHER_TRANSICAO_CELULAS
+    y_mid = y + altura_celula * 0.5
+    y0 = y_transicao - banda_celulas * altura_celula
+    y1 = y_transicao
+    if y_mid <= y0:
+        return 1.0
+    if y_mid >= y1:
+        return 0.0
+    t = (y_mid - y0) / max(1.0, float(y1 - y0))
+    t = t * t * (3.0 - 2.0 * t)
+    return 1.0 - t
+
+
+def escolher_foto_para_frame(info, peso_mascara, progresso_mascara=None):
+    """Escolhe versão da foto conforme zona (máscara vs fundo global)."""
+    orig = info["foto_original"].astype(np.float32)
+    if peso_mascara <= 0.02:
+        return orig.astype(np.uint8)
+    com = info.get("foto_com_mascara")
+    com2 = info.get("foto_com_mascara2")
+    if progresso_mascara is not None and com is not None and com2 is not None:
+        pm = max(0.0, min(1.0, float(progresso_mascara)))
+        com = (com.astype(np.float32) * (1.0 - pm) + com2.astype(np.float32) * pm)
+    elif com is None:
+        com = orig
+    else:
+        com = com.astype(np.float32)
+    peso = max(0.0, min(1.0, float(peso_mascara)))
+    if peso >= 0.98:
+        return com.astype(np.uint8)
+    blend = orig * (1.0 - peso) + com * peso
+    return np.clip(blend, 0, 255).astype(np.uint8)
+
+
+def opacidade_com_feather(opacidade_base, y, altura_celula, y_transicao):
+    """Suaviza opacidade das fotos na faixa de transição."""
+    if y_transicao is None:
+        return opacidade_base
+    y_mid = y + altura_celula * 0.5
+    banda_px = FEATHER_TRANSICAO_CELULAS * altura_celula
+    y0 = y_transicao - banda_px
+    y1 = y_transicao + banda_px * 0.35
+    if y_mid <= y0:
+        return opacidade_base
+    if y_mid >= y1:
+        return min(opacidade_base, 0.38)
+    if y_mid < y_transicao:
+        t = (y_mid - y0) / max(1.0, y_transicao - y0)
+        t = t * t * (3.0 - 2.0 * t)
+        return opacidade_base * (1.0 - t * 0.35)
+    t = (y_mid - y_transicao) / max(1.0, y1 - y_transicao)
+    t = t * t * (3.0 - 2.0 * t)
+    return opacidade_base * (0.65 - t * 0.27)
+
+
+def desenhar_info_no_frame(
+    frame,
+    info,
+    largura_foto,
+    altura_foto,
+    largura_video,
+    altura_video,
+    y_transicao,
+    *,
+    angulo=0,
+    escala=1.0,
+    opacidade=1.0,
+    progresso_mascara=None,
+    respeitar_limites_celula=False,
+):
+    y = int(info["y_final"])
+    peso = peso_mascara_por_linha(y, altura_foto, y_transicao)
+    foto = escolher_foto_para_frame(info, peso, progresso_mascara=progresso_mascara)
+    op = opacidade_com_feather(opacidade, y, altura_foto, y_transicao)
+    desenhar_foto_em_posicao(
+        frame,
+        foto,
+        info["x_final"],
+        y,
+        largura_foto,
+        altura_foto,
+        largura_video,
+        altura_video,
+        angulo=angulo,
+        escala=escala,
+        respeitar_limites_celula=respeitar_limites_celula,
+        opacidade=op,
+    )
+
 
 def calcular_posicao_origem(x_final, y_final, largura_foto, altura_foto, largura_video, altura_video, direcao, escala_inicial=1.0):
     """Calcula a posição de origem da foto baseada na direção de entrada
@@ -354,7 +551,15 @@ def listar_imagens(pasta):
     imagens = sorted(list(set(imagens)))
     return imagens
 
-def criar_video_album(largura_video, altura_video, nome_saida, caminho_mascara, caminho_mascara2, tamanho_celula_base=56):
+def criar_video_album(
+    largura_video,
+    altura_video,
+    nome_saida,
+    caminho_mascara,
+    caminho_mascara2,
+    tamanho_celula_base=56,
+    transicao_offset_celulas=0,
+):
     """Cria o vídeo com efeito de álbum de fotos - todas as fotos em um único grid
     
     Args:
@@ -364,6 +569,7 @@ def criar_video_album(largura_video, altura_video, nome_saida, caminho_mascara, 
         caminho_mascara: Caminho para o arquivo de máscara principal (usada durante entrada/saída)
         caminho_mascara2: Caminho para o arquivo de máscara secundária (usada durante a pausa)
         tamanho_celula_base: Tamanho base da célula em pixels (padrão: 56)
+        transicao_offset_celulas: Ajuste fino da linha mosaico/logo (+ desce, − sobe)
     """
     
     # Calcula configurações específicas para esta resolução
@@ -469,6 +675,24 @@ def criar_video_album(largura_video, altura_video, nome_saida, caminho_mascara, 
         print(f"   ✅ Máscara secundária carregada com sucesso")
         print(f"   • Transparência: {int(TRANSPARENCIA_MASCARA * 100)}%")
         print(f"   • Será usada durante a pausa entre entrada e saída")
+
+    mascara_ref_transicao = mascara_completa2 if mascara_completa2 is not None else mascara_completa
+    offset_transicao = int(transicao_offset_celulas or 0)
+    y_transicao = detectar_y_transicao_grade(
+        mascara_ref_transicao,
+        altura_foto,
+        offset_celulas=offset_transicao,
+    )
+    if y_transicao is not None:
+        linha_grid = y_transicao // max(1, altura_foto)
+        print(f"\n📐 Transição mosaico/logo (alinhada à grelha):")
+        print(f"   • Máscara de referência: {caminho_mascara2 if mascara_completa2 is not None else caminho_mascara}")
+        print(f"   • Linha Y ≈ {y_transicao}px (após linha {linha_grid} de células)")
+        if offset_transicao:
+            print(f"   • Ajuste manual: {offset_transicao:+d} célula(s)")
+        print(f"   • Feather: {FEATHER_TRANSICAO_CELULAS} linhas de células na borda")
+    else:
+        print(f"\n📐 Transição mosaico/logo: modo legado (fundo plano)")
     
     # Calcula posições finais de todas as fotos no grid (sem margens)
     print(f"\n📐 Calculando posições finais no grid...")
@@ -534,14 +758,27 @@ def criar_video_album(largura_video, altura_video, nome_saida, caminho_mascara, 
     
     # Gera imagem de resultado final (preview)
     print(f"\n🖼️  Gerando preview do resultado final...")
-    # Fundo cor #f4c866 (RGB: 244, 200, 102)
-    frame_final = np.ones((altura_video, largura_video, 3), dtype=np.uint8)
-    frame_final[:, :] = [244, 200, 102]  # RGB
-    for i, (foto, (x, y)) in enumerate(zip(todas_fotos_com_mascara, todas_posicoes)):
-        desenhar_foto_em_posicao(
-            frame_final, foto, x, y,
-            largura_foto, altura_foto,
-            largura_video, altura_video
+    frame_final = mascara_float_para_frame(mascara_completa)
+    if frame_final is None:
+        frame_final = frame_cor_fundo(largura_video, altura_video)
+    for i, _foto in enumerate(todas_fotos_com_mascara):
+        info_prev = {
+            "x_final": todas_posicoes[i][0],
+            "y_final": todas_posicoes[i][1],
+            "foto_original": todas_fotos_originais[i],
+            "foto_com_mascara": todas_fotos_com_mascara[i],
+            "foto_com_mascara2": todas_fotos_com_mascara2[i],
+        }
+        desenhar_info_no_frame(
+            frame_final,
+            info_prev,
+            largura_foto,
+            altura_foto,
+            largura_video,
+            altura_video,
+            y_transicao,
+            opacidade=OPACIDADE_FOTO_ENCAIXADA,
+            respeitar_limites_celula=True,
         )
     print(f"   ✅ Resultado final preparado")
     
@@ -689,9 +926,9 @@ def criar_video_album(largura_video, altura_video, nome_saida, caminho_mascara, 
     
     print(f"   ✅ Vídeo inicializado com sucesso!")
     
-    # Frame base cor #f4c866 (RGB: 244, 200, 102)
-    frame_base_branco = np.ones((altura_video, largura_video, 3), dtype=np.uint8)
-    frame_base_branco[:, :] = [244, 200, 102]  # RGB
+    frame_base_mascara1 = mascara_float_para_frame(mascara_completa)
+    if frame_base_mascara1 is None:
+        frame_base_mascara1 = frame_cor_fundo(largura_video, altura_video)
     
     print("\n🎞️  Gerando animação com ondas sobrepostas...")
     
@@ -728,8 +965,7 @@ def criar_video_album(largura_video, altura_video, nome_saida, caminho_mascara, 
             progresso_geral = (frame_atual / total_frames) * 100
             print(f"     Frame {frame_atual}/{total_frames} ({progresso_geral:.1f}%)")
         
-        # Começa com fundo branco
-        frame = frame_base_branco.copy()
+        frame = frame_base_mascara1.copy()
         
         # Processa cada onda e determina seu estado
         for onda_info in ondas_info:
@@ -816,29 +1052,47 @@ def criar_video_album(largura_video, altura_video, nome_saida, caminho_mascara, 
                             fundo_cor * (1 - progresso_fade_opacidade)
                         ).astype(np.uint8)
                     
-                    # Desenha a foto com escala variável
-                    desenhar_foto_em_posicao(
-                        frame, foto_atual,
-                        x_atual, y_atual,
-                        largura_foto, altura_foto,
-                        largura_video, altura_video,
+                    info_draw = dict(info)
+                    info_draw["x_final"] = x_atual
+                    info_draw["y_final"] = y_atual
+                    if progresso_foto < 0.80:
+                        info_draw["_foto_mov"] = info["foto_original"]
+                    else:
+                        info_draw["_foto_mov"] = foto_atual
+                    info_tmp = {
+                        "x_final": x_atual,
+                        "y_final": y_atual,
+                        "foto_original": info["foto_original"],
+                        "foto_com_mascara": info_draw["_foto_mov"],
+                        "foto_com_mascara2": info_draw["_foto_mov"],
+                    }
+                    desenhar_info_no_frame(
+                        frame,
+                        info_tmp,
+                        largura_foto,
+                        altura_foto,
+                        largura_video,
+                        altura_video,
+                        y_transicao,
                         angulo=angulo_atual,
                         escala=escala_atual,
-                        opacidade=opacidade_encaixe
+                        opacidade=opacidade_encaixe,
                     )
             
             else:
-                # Onda já terminou - desenha estática na posição final COM MÁSCARA (escala 1.0 = tamanho normal)
                 for info in onda_info['onda']:
-                    desenhar_foto_em_posicao(
-                        frame, info['foto_com_mascara'],  # Usa versão COM MÁSCARA quando estática
-                        info['x_final'], info['y_final'],
-                        largura_foto, altura_foto,
-                        largura_video, altura_video,
+                    desenhar_info_no_frame(
+                        frame,
+                        info,
+                        largura_foto,
+                        altura_foto,
+                        largura_video,
+                        altura_video,
+                        y_transicao,
                         angulo=0,
                         escala=1.0,
-                        respeitar_limites_celula=True,  # Posição final: cada imagem na sua célula!
-                        opacidade=OPACIDADE_FOTO_ENCAIXADA
+                        respeitar_limites_celula=True,
+                        opacidade=OPACIDADE_FOTO_ENCAIXADA,
                     )
         
         # Escreve o frame
@@ -866,42 +1120,41 @@ def criar_video_album(largura_video, altura_video, nome_saida, caminho_mascara, 
     frame_pausa_count = 0
     
     for frame_idx in range(total_frames_pausa):
-        # Cria frame com cor #f4c866
-        frame = np.ones((altura_video, largura_video, 3), dtype=np.uint8)
-        frame[:, :] = [244, 200, 102]  # RGB: #f4c866
-        
-        # Calcula qual fase da pausa estamos
         if frame_idx < frames_fade_entrada:
-            # FASE 1: Fade de máscara1 para máscara2 (primeiros 3 segundos)
-            progresso_fade = frame_idx / frames_fade_entrada
-            
-            # Desenha todas as fotos com fade entre máscaras
+            progresso_fade = frame_idx / max(1, frames_fade_entrada)
+            fundo_float = misturar_mascaras_float(mascara_completa, mascara_completa2, progresso_fade)
+            frame = mascara_float_para_frame(fundo_float)
+            if frame is None:
+                frame = frame_cor_fundo(largura_video, altura_video)
             for info in info_fotos:
-                # Mistura entre máscara1 e máscara2
-                foto_atual = (
-                    info['foto_com_mascara'] * (1 - progresso_fade) +
-                    info['foto_com_mascara2'] * progresso_fade
-                ).astype(np.uint8)
-                
-                desenhar_foto_em_posicao(
-                    frame, foto_atual,
-                    info['x_final'], info['y_final'],
-                    largura_foto, altura_foto,
-                    largura_video, altura_video,
-                    respeitar_limites_celula=True,  # Grid parado: cada imagem na sua célula!
-                    opacidade=OPACIDADE_FOTO_ENCAIXADA
+                desenhar_info_no_frame(
+                    frame,
+                    info,
+                    largura_foto,
+                    altura_foto,
+                    largura_video,
+                    altura_video,
+                    y_transicao,
+                    progresso_mascara=progresso_fade,
+                    respeitar_limites_celula=True,
+                    opacidade=OPACIDADE_FOTO_ENCAIXADA,
                 )
-        
         else:
-            # FASE 2: Mantém máscara2 até o final do vídeo (10 segundos se DURACAO_PAUSA_MEIO=13)
+            frame = mascara_float_para_frame(mascara_completa2)
+            if frame is None:
+                frame = frame_cor_fundo(largura_video, altura_video)
             for info in info_fotos:
-                desenhar_foto_em_posicao(
-                    frame, info['foto_com_mascara2'],
-                    info['x_final'], info['y_final'],
-                    largura_foto, altura_foto,
-                    largura_video, altura_video,
-                    respeitar_limites_celula=True,  # Grid parado: cada imagem na sua célula!
-                    opacidade=OPACIDADE_FOTO_ENCAIXADA
+                desenhar_info_no_frame(
+                    frame,
+                    info,
+                    largura_foto,
+                    altura_foto,
+                    largura_video,
+                    altura_video,
+                    y_transicao,
+                    progresso_mascara=1.0,
+                    respeitar_limites_celula=True,
+                    opacidade=OPACIDADE_FOTO_ENCAIXADA,
                 )
         
         # Escreve frame no vídeo
@@ -1047,7 +1300,8 @@ def gerar_video_por_config(config):
         nome_saida=config['nome'],
         caminho_mascara=config['mascara'],
         caminho_mascara2=config['mascara2'],
-        tamanho_celula_base=config.get('celula_base', 56)
+        tamanho_celula_base=config.get('celula_base', 56),
+        transicao_offset_celulas=config.get('transicao_offset_celulas', 0),
     )
     return config['nome']
 
