@@ -76,6 +76,7 @@ HTML_PAGE = """<!doctype html>
   <meta http-equiv="Pragma" content="no-cache" />
   <meta http-equiv="Expires" content="0" />
   <title>Mosaico Pic Brand - Front</title>
+  <!-- FRONT_BUILD:__FRONT_BUILD__ -->
   <style>
     :root {
       --bg: #0f0f12;
@@ -442,12 +443,13 @@ HTML_PAGE = """<!doctype html>
       tile_interval_ms: 360,
       spotlight_min_gap_ms: 1000,
       duplicate_fill: false,
+      overlay_telao_enabled: true,
       mosaic_fullscreen: true,
-      tile_size_px: 56,
+      tile_size_px: 38,
       mosaic_width: 768,
       mosaic_height: 960,
       mosaic_cols: 20,
-      mosaic_rows: 5,
+      mosaic_rows: 25,
     };
     const renderedSet = new Set();
     const srcToNode = new Map();
@@ -460,18 +462,16 @@ HTML_PAGE = """<!doctype html>
     let firstSyncPending = false;
     let lastDupSig = "";
     let prevDupFill = false;
-    let bulkAppendTimer = null;
+    let dupGradualTimer = null;
     let bulkAppendSig = "";
     let resizeTimer = null;
     let bulkAppendGen = 0;
-    const BULK_TILE_CHUNK = 10;
-    const BULK_CHUNK_PAUSE_MS = 110;
     const ENTRY_STAGGER_COL_MS = 26;
     const ENTRY_STAGGER_ROW_MS = 38;
     const ENTRY_STAGGER_MAX_MS = 420;
     const MAX_PARALLEL_TILE_ANIMS = 1;
     const EASE_SNAP = "cubic-bezier(0.16, 1, 0.3, 1)";
-    const MAX_DUP_FILL_CELLS = 180;
+    const MAX_DUP_FILL_CELLS_CAP = 520;
     let lastMosaicFp = "";
     let lastMosaicGen = 0;
     let lastDeltaGen = 0;
@@ -488,6 +488,12 @@ HTML_PAGE = """<!doctype html>
 
     /* Overlay por cima do mosaico (invisível): cada célula revela só tile ∩ logo, tinte semitransparente. */
     const OVERLAY_TINT_ALPHA = 0.96;
+    const TELAO_REF_W = 768;
+    const TELAO_REF_H = 960;
+    const MOSAIC_BAND_FRAC = 0.65;
+    const BRAND_BAND_FRAC = 0.35;
+    const LOGO_SHELL_WIDTH_FRAC = 1.0;
+    const LOGO_BAND_HEIGHT_FRAC = 1.0;
     const REVEAL_TILE_STAGGER_MS = 10;
     let overlayRevealMask = null;
     let overlayRevealMaskCtx = null;
@@ -495,6 +501,8 @@ HTML_PAGE = """<!doctype html>
     let overlayRevealTmpCtx = null;
     let overlayHasReveal = false;
     let overlayLayerPinned = false;
+    let overlayTelaoSettingWasOn = false;
+    let pendingOverlayRevealCatchup = false;
     let tileRevealGen = 0;
     let redrawOverlayPending = 0;
     let overlayRescanPending = 0;
@@ -529,7 +537,7 @@ HTML_PAGE = """<!doctype html>
       return (
         syncApplyLock
         || firstSyncPending
-        || bulkAppendTimer !== null
+        || dupGradualTimer !== null
         || activeTileAnims > 0
         || tileAnimWaitQueue.length > 0
       );
@@ -571,8 +579,35 @@ HTML_PAGE = """<!doctype html>
       }
     }
 
+    function overlayTelaoEnabled() {
+      return settings.overlay_telao_enabled === true;
+    }
+
+    function maskHasRevealContent() {
+      if (!overlayRevealMaskCtx || !overlayRevealMask) return false;
+      const w = overlayRevealMask.width;
+      const h = overlayRevealMask.height;
+      if (w < 2 || h < 2) return false;
+      try {
+        const data = overlayRevealMaskCtx.getImageData(0, 0, w, h).data;
+        const step = Math.max(4, Math.floor((w * h) / 4096));
+        for (let i = 3; i < data.length; i += step * 4) {
+          if (data[i] > 12) return true;
+        }
+      } catch (e) {
+        return overlayHasReveal;
+      }
+      return false;
+    }
+
     function overlayRevealIsActive() {
-      return overlayHasReveal && overlayRevealMask && overlayRevealMaskCtx;
+      return (
+        overlayTelaoEnabled()
+        && overlayHasReveal
+        && overlayRevealMask
+        && overlayRevealMaskCtx
+        && maskHasRevealContent()
+      );
     }
 
     function showOverlayLayerDom() {
@@ -614,7 +649,7 @@ HTML_PAGE = """<!doctype html>
     }
 
     function scheduleOverlayRescan() {
-      if (!overlayCurrent) return;
+      if (!overlayTelaoEnabled() || !overlayCurrent) return;
       if (overlayRescanPending) return;
       health.overlayRescans += 1;
       overlayRescanPending = requestAnimationFrame(function() {
@@ -629,14 +664,15 @@ HTML_PAGE = """<!doctype html>
       });
     }
 
-    function loadOverlayArt(url) {
-      const next = url || "";
+    function loadOverlayArt(url, catchupExistingTiles) {
+      const next = (overlayTelaoEnabled() && url) ? url : "";
       if (next === overlayCurrent && overlayArtImage && overlayArtImage.complete) {
+        if (!next) resetOverlayReveal();
         return;
       }
       overlayCurrent = next;
       resetOverlayReveal();
-      if (!url) {
+      if (!next) {
         overlayArtImage = null;
         return;
       }
@@ -650,7 +686,10 @@ HTML_PAGE = """<!doctype html>
           );
         }
         overlayHasReveal = false;
-        if (renderedSet.size) scheduleOverlayRescan();
+        hideOverlayLayer();
+        if (catchupExistingTiles && renderedSet.size) {
+          revealExistingTilesStaggered(overlayRevealStepMs(0));
+        }
       };
       img.onerror = function() {
         if (overlayArtImage !== img) return;
@@ -668,13 +707,39 @@ HTML_PAGE = """<!doctype html>
       return { x: (bw - w) / 2, y: (bh - h) / 2, w: w, h: h };
     }
 
-    /* Área real do grid (onde existem quadradinhos), não o telão inteiro. */
+    function mosaicBandHeightPx() {
+      const shellH = Math.max(1, telaoShell ? telaoShell.clientHeight : TELAO_REF_H);
+      return Math.max(1, Math.floor(shellH * MOSAIC_BAND_FRAC));
+    }
+
+    function brandBandHeightPx() {
+      const shellH = Math.max(1, telaoShell ? telaoShell.clientHeight : TELAO_REF_H);
+      return Math.max(1, shellH - mosaicBandHeightPx());
+    }
+
+    function applyTelaoBandLayout() {
+      if (!telaoShell) return;
+      const mh = mosaicBandHeightPx();
+      const bh = brandBandHeightPx();
+      telaoShell.style.setProperty("--mosaic-band-h", mh + "px");
+      telaoShell.style.setProperty("--brand-band-h", bh + "px");
+      if (mosaicStage) {
+        mosaicStage.style.height = mh + "px";
+        mosaicStage.style.top = "0";
+      }
+      if (bg) {
+        bg.style.height = "100%";
+        bg.style.top = "0";
+      }
+    }
+
+    /* Faixa superior do telao (mosaico), nao o ecrã inteiro. */
     function getMosaicCoverageRect() {
       const ts = Math.max(1, layoutTilePx || 56);
       const cols = Math.max(1, layoutCols || MOSAIC_COLS_FIXED);
       const rows = Math.max(1, layoutRows || 1);
-      const shellW = Math.max(1, telaoShell ? telaoShell.clientWidth : 768);
-      const shellH = Math.max(1, telaoShell ? telaoShell.clientHeight : 960);
+      const shellW = Math.max(1, telaoShell ? telaoShell.clientWidth : TELAO_REF_W);
+      const shellH = Math.max(1, telaoShell ? telaoShell.clientHeight : TELAO_REF_H);
       return {
         x: 0,
         y: 0,
@@ -683,20 +748,34 @@ HTML_PAGE = """<!doctype html>
       };
     }
 
+    function logoFitScaleForShell() {
+      const sw = Math.max(1, telaoShell ? telaoShell.clientWidth : TELAO_REF_W);
+      const sh = Math.max(1, telaoShell ? telaoShell.clientHeight : TELAO_REF_H);
+      const s = Math.min(sw / TELAO_REF_W, sh / TELAO_REF_H);
+      return Math.max(1.0, Math.min(3.5, 1.2 * Math.pow(s, 0.82)));
+    }
+
     function fitLogoInMosaicArea(nw, nh) {
-      const area = getMosaicCoverageRect();
-      const scale = Math.min(
-        area.w / Math.max(1, nw),
-        area.h / Math.max(1, nh)
-      );
-      const w = nw * scale;
-      const h = nh * scale;
+      const shellW = Math.max(1, telaoShell ? telaoShell.clientWidth : TELAO_REF_W);
+      const shellH = Math.max(1, telaoShell ? telaoShell.clientHeight : TELAO_REF_H);
+      const scale = Math.min(shellW * 1.5 / Math.max(1, nw), shellH * 1.5 / Math.max(1, nh));
+      const fw = nw * scale;
+      const fh = nh * scale;
       return {
-        x: area.x + (area.w - w) / 2,
-        y: area.y,
-        w: w,
-        h: h,
+        x: (shellW - fw) / 2,
+        y: (shellH - fh) / 2,
+        w: fw,
+        h: fh,
       };
+    }
+
+    function isBlockedBackdropUrl(url) {
+      const u = String(url || "").toLowerCase();
+      return (
+        u.includes("fundo_evento")
+        || u.includes("halo")
+        || u.includes("/overlay?")
+      );
     }
 
     function ensureOverlayRevealPaintCtx() {
@@ -833,6 +912,7 @@ HTML_PAGE = """<!doctype html>
     }
 
     function revealTileCellOnLogo(node) {
+      if (!overlayTelaoEnabled()) return;
       const tile = resolveTileNode(node);
       if (!tile || tile.classList.contains("tile-waiting-spotlight")) return;
       if (!tileHitOnLogo(tile)) return;
@@ -846,20 +926,22 @@ HTML_PAGE = """<!doctype html>
 
     function redrawOverlayNow() {
       const layer = document.getElementById("overlayLayer");
-      if (!overlayCurrent || !overlayArtImage) {
+      if (!overlayTelaoEnabled() || !overlayCurrent || !overlayArtImage) {
         resetOverlayReveal();
+        return;
+      }
+      if (!renderedSet.size) {
+        overlayHasReveal = false;
+        hideOverlayLayer();
         return;
       }
       const ctx = ensureOverlayRevealPaintCtx();
       if (!ctx || !overlayRevealCanvas) return;
       const w = overlayRevealCanvas.width;
       const h = overlayRevealCanvas.height;
-      if (!overlayRevealIsActive()) {
-        /* Mosaico a preencher: não esconder camada já revelada até a máscara ser reposta. */
-        if (!overlayLayerPinned) {
-          overlayHasReveal = false;
-          hideOverlayLayer();
-        }
+      if (!maskHasRevealContent()) {
+        overlayHasReveal = false;
+        hideOverlayLayer();
         return;
       }
       if (!overlayArtImage.complete || overlayArtImage.naturalWidth < 1) {
@@ -906,10 +988,10 @@ HTML_PAGE = """<!doctype html>
       }, Math.max(0, delayMs || 0));
     }
 
-    function queueTileOverlayReveal(tileNode, batchStagger) {
+    function queueTileOverlayReveal(tileNode, cellIndex) {
       const run = function() {
         if (!tileNode.isConnected) return;
-        onTilePlaced(tileNode, batchStagger);
+        onTilePlaced(tileNode, cellIndex);
       };
       const img = tileNode.querySelector(".tile-photo");
       if (img && !img.complete) {
@@ -924,8 +1006,9 @@ HTML_PAGE = """<!doctype html>
     }
 
     function revealExistingTilesStaggered(stepMs) {
-      if (!overlayCurrent || !overlayArtImage || !overlayArtImage.complete) return;
+      if (!overlayTelaoEnabled() || !overlayCurrent || !overlayArtImage || !overlayArtImage.complete) return;
       const step = Math.max(4, stepMs || REVEAL_TILE_STAGGER_MS);
+      ensureOverlayRevealMask();
       const tiles = [];
       for (const node of srcToNode.values()) {
         if (node.classList.contains("tile-waiting-spotlight")) continue;
@@ -937,19 +1020,20 @@ HTML_PAGE = """<!doctype html>
       let si = 0;
       for (const node of tiles) {
         setTimeout(function() {
+          if (!node.isConnected) return;
           revealTileCellOnLogo(node);
         }, si * step);
         si += 1;
       }
     }
 
-    function onTilePlaced(node, batchStagger) {
+    function onTilePlaced(node, cellIndexHint) {
       if (!node || node.classList.contains("tile-waiting-spotlight")) return;
+      const cellIndex = Number(node.dataset.cellIndex) || 0;
+      const hint = cellIndexHint == null ? cellIndex : Number(cellIndexHint) || 0;
+      const stepDelay = overlayRevealStepMs(hint);
       if (activeTileAnims > 0 || tileAnimWaitQueue.length) {
-        const delay = batchStagger == null
-          ? 48
-          : Math.min(Math.max(0, Number(batchStagger)) * 10, 120);
-        scheduleTileReveal(node, delay);
+        scheduleTileReveal(node, Math.min(stepDelay, 200));
         return;
       }
       scheduleTileReveal(node, 0);
@@ -961,11 +1045,9 @@ HTML_PAGE = """<!doctype html>
       if (!ctx || !overlayRevealMask) return;
       ctx.clearRect(0, 0, overlayRevealMask.width, overlayRevealMask.height);
       overlayHasReveal = false;
-      for (const node of srcToNode.values()) {
-        if (node.classList.contains("tile-waiting-spotlight")) continue;
-        stampTileReveal(node);
-      }
-      redrawOverlaySync();
+      hideOverlayLayer();
+      if (!renderedSet.size) return;
+      revealExistingTilesStaggered(overlayRevealStepMs(0));
     }
 
     function ensureOverlayRevealTmp(w, h) {
@@ -993,35 +1075,36 @@ HTML_PAGE = """<!doctype html>
 
     const MOSAIC_COLS_FIXED = 20;
 
+    /* 20 colunas exatas: pastilha = largura_util / 20 (telao 768 px => 38 px). */
+    function telaoTilePxForWidth(widthPx) {
+      return Math.max(32, Math.floor(Math.max(1, widthPx) / MOSAIC_COLS_FIXED));
+    }
+
     function applyGridLayout() {
       if (!telaoShell || !mosaicStage || !grid) return false;
-      const vw = window.innerWidth || 768;
-      const vh = window.innerHeight || 960;
+      const vw = window.innerWidth || TELAO_REF_W;
+      const vh = window.innerHeight || TELAO_REF_H;
       layoutCols = MOSAIC_COLS_FIXED;
-      const hint = Math.max(40, Math.min(80, Number(settings.tile_size_px) || 56));
-      const maxTsFitWidth = Math.floor(vw / layoutCols);
-      let ts = Math.min(hint, maxTsFitWidth);
-      ts = Math.max(40, ts);
 
       if (settings.mosaic_fullscreen) {
         telaoShell.classList.add("shell-fill");
         telaoShell.style.width = vw + "px";
         telaoShell.style.height = vh + "px";
         telaoShell.style.transform = "none";
-        layoutRows = Math.max(1, Math.floor(vh / ts));
+        layoutTilePx = telaoTilePxForWidth(vw);
+        layoutRows = Math.max(1, Math.floor(vh / layoutTilePx));
       } else {
         telaoShell.classList.remove("shell-fill");
-        const fw = Math.max(320, Number(settings.mosaic_width) || 768);
-        const fh = Math.max(400, Number(settings.mosaic_height) || 960);
-        layoutRows = Math.max(1, Number(settings.mosaic_rows) || 5);
+        const fw = Math.max(TELAO_REF_W, Number(settings.mosaic_width) || TELAO_REF_W);
+        const fh = Math.max(TELAO_REF_H, Number(settings.mosaic_height) || TELAO_REF_H);
         telaoShell.style.width = fw + "px";
         telaoShell.style.height = fh + "px";
         const scale = Math.min(vw / fw, vh / fh, 1);
         telaoShell.style.transform = "scale(" + scale + ")";
-        ts = Math.max(40, Math.min(ts, Math.floor(Math.min(fw / layoutCols, fh / layoutRows))));
+        layoutTilePx = telaoTilePxForWidth(fw);
+        layoutRows = Math.max(1, Math.floor(fh / layoutTilePx));
       }
-
-      layoutTilePx = ts;
+      const ts = layoutTilePx;
       const sig = layoutCols + "x" + layoutRows + "x" + ts;
       const changed = sig !== lastLayoutSig;
       if (changed) {
@@ -1029,6 +1112,7 @@ HTML_PAGE = """<!doctype html>
         grid.style.setProperty("--tile-size", ts + "px");
         grid.style.gridTemplateColumns = "repeat(" + layoutCols + ", " + ts + "px)";
         grid.style.gridAutoRows = ts + "px";
+        gridCursor = renderedSet.size;
         const pin = overlayLayerPinned;
         overlayRevealMask = null;
         overlayRevealMaskCtx = null;
@@ -1060,7 +1144,7 @@ HTML_PAGE = """<!doctype html>
     }
 
     function cappedTargetSlots() {
-      return Math.min(computeTargetSlots(), MAX_DUP_FILL_CELLS);
+      return Math.min(computeTargetSlots(), MAX_DUP_FILL_CELLS_CAP);
     }
 
     function duplicateFillSignature(images, target) {
@@ -1110,15 +1194,7 @@ HTML_PAGE = """<!doctype html>
       firstSyncDone = true;
       firstSyncPending = false;
       gridCursor = Math.max(gridCursor, renderedSet.size);
-      if (!overlayCurrent) return;
-      const deferMs = settings.duplicate_fill
-        ? Math.min(480, intensityProfile().entry + 80)
-        : 0;
-      if (deferMs > 0) {
-        setTimeout(scheduleOverlayRescan, deferMs);
-      } else {
-        scheduleOverlayRescan();
-      }
+      /* Revelacao do overlay ja ocorreu pastilha a pastilha em appendSingleDupTile / onTilePlaced. */
     }
 
     function expandToTarget(base, target) {
@@ -1140,6 +1216,36 @@ HTML_PAGE = """<!doctype html>
         forte: { entry: 680, spotlightExit: 1880 },
       };
       return map[settings.animation_intensity] || map.medio;
+    }
+
+    function dupFillPauseMs(cellIndex) {
+      const configured = Number(settings.tile_interval_ms) || 320;
+      const prof = intensityProfile();
+      const wave = entryStaggerMs(cellIndex) * 0.35;
+      return Math.max(
+        80,
+        Math.min(8000, Math.round(configured + wave + prof.entry * 0.08))
+      );
+    }
+
+    /* Ritmo da revelacao do logo = ritmo da montagem do mosaico. */
+    function overlayRevealStepMs(cellIndex) {
+      const configured = Number(settings.tile_interval_ms) || 320;
+      const wave = entryStaggerMs(cellIndex == null ? 0 : cellIndex) * 0.25;
+      return Math.max(40, Math.min(8000, Math.round(configured * 0.85 + wave)));
+    }
+
+    function normalizeDisplayItems(displayList) {
+      const out = [];
+      for (let i = 0; i < displayList.length; i++) {
+        const item = displayList[i];
+        if (typeof item === "string") {
+          out.push({ src: item, cellIndex: i });
+        } else if (item && item.src) {
+          out.push({ src: item.src, cellIndex: Number(item.cellIndex) || i });
+        }
+      }
+      return out;
     }
 
     function gridCellFromIndex(cellIndex) {
@@ -1557,7 +1663,6 @@ HTML_PAGE = """<!doctype html>
       gridCursor = Math.max(gridCursor, cell);
       firstSyncDone = true;
       firstSyncPending = false;
-      if (overlayCurrent) scheduleOverlayRescan();
     }
 
     /* Fly-in: catalogo grande = grelha instantanea; poucas fotos = fila com destaque/voo. */
@@ -1778,6 +1883,8 @@ HTML_PAGE = """<!doctype html>
     }
 
     function shouldShowSpotlight() {
+      /* Duplicar grelha: centenas de pastilhas; spotlight deixava fotos invisíveis (opacity 0). */
+      if (settings.duplicate_fill) return false;
       return usesMosaicFlyIn() || usesClassicSpotlight();
     }
 
@@ -1854,7 +1961,7 @@ HTML_PAGE = """<!doctype html>
         if (animated) {
           d.dataset.deferEntryAnim = "1";
         } else if (!deferOverlayQueue) {
-          queueTileOverlayReveal(d, 0);
+          queueTileOverlayReveal(d, cellIndex);
         }
       }
       img.loading = lazyLoad ? "lazy" : "eager";
@@ -1924,67 +2031,86 @@ HTML_PAGE = """<!doctype html>
       appendTileAt(src, animated, cellIndex);
     }
 
-    function appendTilesInstantChunk(displayList, start, lazyLoad) {
-      const frag = document.createDocumentFragment();
-      const pendingAnim = [];
-      const end = Math.min(start + BULK_TILE_CHUNK, displayList.length);
-      for (let i = start; i < end; i++) {
-        const item = displayList[i];
-        const src = typeof item === "string" ? item : item.src;
-        const cellIndex = typeof item === "string" ? i : item.cellIndex;
-        const key = mosaicTileKey(src);
-        if (renderedSet.has(key)) continue;
-        const existing = findTileByCellIndex(cellIndex);
-        if (existing) continue;
-        const d = createTile(src, true, lazyLoad, cellIndex, true);
-        const img = d.querySelector(".tile-photo");
-        if (img) {
-          img.style.setProperty("--entry-delay", "0ms");
-          applyChunkEntryMotionVars(img, cellIndex);
-        }
-        pendingAnim.push(d);
-        frag.appendChild(d);
-        renderedSet.add(key);
-        srcToNode.set(key, d);
+    function appendSingleDupTile(src, cellIndex, onDone) {
+      const key = mosaicTileKey(src);
+      if (renderedSet.has(key)) {
+        if (typeof onDone === "function") onDone();
+        return;
       }
-      grid.appendChild(frag);
-      requestAnimationFrame(function() {
-        for (const d of pendingAnim) {
-          startTileEntryAnimIfNeeded(d, null);
-        }
+      if (findTileByCellIndex(cellIndex)) {
+        if (typeof onDone === "function") onDone();
+        return;
+      }
+      const d = createTile(src, true, false, cellIndex, false);
+      const img = d.querySelector(".tile-photo");
+      if (img) {
+        img.style.setProperty("--entry-delay", "0ms");
+        applyChunkEntryMotionVars(img, cellIndex);
+      }
+      grid.appendChild(d);
+      renderedSet.add(key);
+      srcToNode.set(key, d);
+      if (shouldShowSpotlight()) {
+        scheduleSpotlight(src);
+        if (typeof onDone === "function") onDone();
+        return;
+      }
+      startTileEntryAnimIfNeeded(d, function() {
+        onTilePlaced(d, 0);
+        if (typeof onDone === "function") onDone();
       });
-      return end;
     }
 
-    function appendTilesInstant(displayList, onDone) {
+    function appendTilesGradual(displayList, onDone) {
       bulkAppendGen += 1;
       const myGen = bulkAppendGen;
-      const lazyLoad = true;
-      if (!displayList.length) {
+      const items = normalizeDisplayItems(displayList);
+      if (!items.length) {
         if (typeof onDone === "function") onDone();
         return;
       }
-      if (displayList.length <= BULK_TILE_CHUNK) {
-        appendTilesInstantChunk(displayList, 0, lazyLoad);
-        if (typeof onDone === "function") onDone();
-        return;
+      let idx = 0;
+      function cancelGradual() {
+        if (dupGradualTimer) {
+          clearTimeout(dupGradualTimer);
+          dupGradualTimer = null;
+        }
+        firstSyncPending = false;
       }
-      let offset = 0;
-      function step() {
+      function placeNext() {
+        dupGradualTimer = null;
         if (myGen !== bulkAppendGen) {
-          firstSyncPending = false;
+          cancelGradual();
           return;
         }
-        offset = appendTilesInstantChunk(displayList, offset, lazyLoad);
-        if (offset < displayList.length) {
-          setTimeout(function() {
-            requestAnimationFrame(step);
-          }, BULK_CHUNK_PAUSE_MS);
-        } else if (typeof onDone === "function") {
-          onDone();
+        if (spotlightPipelineBusy()) {
+          dupGradualTimer = setTimeout(placeNext, 120);
+          return;
         }
+        if (activeTileAnims >= MAX_PARALLEL_TILE_ANIMS || tileAnimWaitQueue.length) {
+          dupGradualTimer = setTimeout(placeNext, 70);
+          return;
+        }
+        while (idx < items.length) {
+          const item = items[idx];
+          const key = mosaicTileKey(item.src);
+          idx += 1;
+          if (renderedSet.has(key) && findTileByCellIndex(item.cellIndex)) {
+            continue;
+          }
+          appendSingleDupTile(item.src, item.cellIndex, function() {
+            if (myGen !== bulkAppendGen) return;
+            if (idx >= items.length) {
+              if (typeof onDone === "function") onDone();
+              return;
+            }
+            dupGradualTimer = setTimeout(placeNext, dupFillPauseMs(item.cellIndex));
+          });
+          return;
+        }
+        if (typeof onDone === "function") onDone();
       }
-      requestAnimationFrame(step);
+      requestAnimationFrame(placeNext);
     }
 
     function syncDuplicateFill(images) {
@@ -2000,9 +2126,9 @@ HTML_PAGE = """<!doctype html>
       const display = expandToTarget(images, target);
       const sig = duplicateFillSignature(images, target);
       if (sig === lastDupSig) return;
-      if (bulkAppendTimer) {
-        clearTimeout(bulkAppendTimer);
-        bulkAppendTimer = null;
+      if (dupGradualTimer) {
+        clearTimeout(dupGradualTimer);
+        dupGradualTimer = null;
       }
       lastDupSig = sig;
       firstSyncPending = true;
@@ -2013,7 +2139,7 @@ HTML_PAGE = """<!doctype html>
       if (fullRebuild) {
         clearGrid();
         lastDupSig = sig;
-        appendTilesInstant(display, function() {
+        appendTilesGradual(display, function() {
           finishBulkMosaicAppend();
           const last = display[display.length - 1];
           if (last && shouldShowSpotlight()) scheduleSpotlight(last);
@@ -2039,7 +2165,7 @@ HTML_PAGE = """<!doctype html>
         return;
       }
 
-      appendTilesInstant(toCreate, function() {
+      appendTilesGradual(toCreate, function() {
         finishBulkMosaicAppend();
       });
     }
@@ -2053,7 +2179,7 @@ HTML_PAGE = """<!doctype html>
       pendingQueue.length = 0;
       pendingSet.clear();
       if (feederTimer) { clearTimeout(feederTimer); feederTimer = null; }
-      if (bulkAppendTimer) { clearTimeout(bulkAppendTimer); bulkAppendTimer = null; }
+      if (dupGradualTimer) { clearTimeout(dupGradualTimer); dupGradualTimer = null; }
       bulkAppendSig = "";
       feederRunning = false;
       feederAwaitingSpotlight = false;
@@ -2156,7 +2282,10 @@ HTML_PAGE = """<!doctype html>
     }
 
     function applyArtFromState(data) {
-      const nextBg = data.background || data.backdrop || "";
+      let nextBg = data.background || data.backdrop || "";
+      if (isBlockedBackdropUrl(nextBg)) {
+        nextBg = "";
+      }
       if (bgImg) {
         if (nextBg) {
           if (nextBg !== bgCurrent) {
@@ -2179,10 +2308,31 @@ HTML_PAGE = """<!doctype html>
         }
       }
       const nextOverlay = data.overlay || "";
-      if (nextOverlay !== overlayCurrent) {
-        if (nextOverlay) loadOverlayArt(nextOverlay);
-        else loadOverlayArt("");
+      if (!overlayTelaoEnabled()) {
+        if (overlayCurrent) loadOverlayArt("");
+      } else if (nextOverlay) {
+        if (nextOverlay !== overlayCurrent || pendingOverlayRevealCatchup) {
+          const catchup = pendingOverlayRevealCatchup;
+          pendingOverlayRevealCatchup = false;
+          loadOverlayArt(nextOverlay, catchup);
+        }
+      } else if (overlayCurrent) {
+        loadOverlayArt("");
       }
+    }
+
+    function syncOverlayTelaoFromSettings() {
+      const on = overlayTelaoEnabled();
+      if (!on) {
+        overlayTelaoSettingWasOn = false;
+        if (overlayCurrent || overlayArtImage) loadOverlayArt("");
+        return;
+      }
+      if (on && !overlayTelaoSettingWasOn) {
+        pendingOverlayRevealCatchup = true;
+        scheduleTick(80);
+      }
+      overlayTelaoSettingWasOn = on;
     }
 
     function applyMosaicDelta(data) {
@@ -2288,10 +2438,12 @@ HTML_PAGE = """<!doctype html>
         }
         syncApplyLock = true;
         if (data.settings) settings = Object.assign(settings, data.settings);
+        syncOverlayTelaoFromSettings();
         const settingsKey = [
           settings.tile_size_px,
           settings.spotlight_min_gap_ms,
           settings.duplicate_fill,
+          settings.overlay_telao_enabled,
           settings.mosaic_fullscreen,
           settings.mosaic_width,
           settings.mosaic_height,
@@ -2358,6 +2510,12 @@ HTML_PAGE = """<!doctype html>
 
     loadOverlayArt("");
     applyGridLayout();
+    fetch("/api/version", { cache: "no-store" })
+      .then(function(r) { return r.json(); })
+      .then(function(v) {
+        console.log("[Mosaico telao] build", v && v.version ? v.version : "?");
+      })
+      .catch(function() {});
     scheduleTick(0);
     setTimeout(function() {
       if (!renderedSet.size) scheduleTick(0);
@@ -2401,7 +2559,10 @@ def _load_html_page() -> str:
         text = src_path.read_text(encoding="utf-8")
         match = re.search(r'HTML_PAGE\s*=\s*"""(.*?)"""', text, flags=re.DOTALL)
         if match:
-            return match.group(1)
+            html = match.group(1)
+            build = _frontend_version()
+            html = html.replace("__FRONT_BUILD__", build)
+            return html
     except Exception:
         pass
     return HTML_PAGE
@@ -2547,9 +2708,10 @@ class SimpleMosaicFrontend:
         self.animation_mode: str = "mosaic_fly_in"
         self.animation_intensity: str = "medio"
         self.tile_interval_ms: int = 360
-        self.tile_size_px: int = 48
+        self.tile_size_px: int = 38
         self.mosaic_fullscreen: bool = True
         self.duplicate_fill: bool = False
+        self.overlay_telao_enabled: bool = True
         self.mosaic_width: int = TELAO_LARGURA_PX
         self.mosaic_height: int = TELAO_ALTURA_PX
         self.mosaic_cols: int = TELAO_COLUNAS
@@ -2615,6 +2777,7 @@ class SimpleMosaicFrontend:
         tile_size_px: int | None = None,
         mosaic_fullscreen: bool | None = None,
         duplicate_fill: bool | None = None,
+        overlay_telao_enabled: bool | None = None,
     ):
         if animation_mode is not None:
             s = str(animation_mode).strip().lower()
@@ -2638,6 +2801,8 @@ class SimpleMosaicFrontend:
             self.mosaic_fullscreen = bool(mosaic_fullscreen)
         if duplicate_fill is not None:
             self.duplicate_fill = bool(duplicate_fill)
+        if overlay_telao_enabled is not None:
+            self.overlay_telao_enabled = bool(overlay_telao_enabled)
 
     def notify_mosaic_changed(self) -> None:
         """Chame apos cada nova imagem no MOSAIC para o cliente re-pollar."""
@@ -2706,6 +2871,7 @@ class SimpleMosaicFrontend:
             "tile_size_px": self.tile_size_px,
             "mosaic_fullscreen": self.mosaic_fullscreen,
             "duplicate_fill": self.duplicate_fill,
+            "overlay_telao_enabled": self.overlay_telao_enabled,
             "mosaic_width": self.mosaic_width,
             "mosaic_height": self.mosaic_height,
             "mosaic_cols": self.mosaic_cols,
@@ -2897,11 +3063,22 @@ class SimpleMosaicFrontend:
         )
         return payload
 
+    @staticmethod
+    def _reject_backdrop_path(path: Path | None) -> Path | None:
+        if path is None or not path.is_file():
+            return None
+        stem = path.stem.lower()
+        if stem.startswith("fundo_evento") or stem.startswith("fundobaixo"):
+            return None
+        if "halo" in stem:
+            return None
+        return path
+
     def set_backdrop_path(self, backdrop_path: str | None = None, background_path: str | None = None):
         path = backdrop_path or background_path
         if path:
-            p = Path(path)
-            self.backdrop_path = p if p.exists() else None
+            p = self._reject_backdrop_path(Path(path))
+            self.backdrop_path = p
         else:
             self.backdrop_path = None
         self._backdrop_revision = int(self._backdrop_revision) + 1

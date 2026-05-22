@@ -47,10 +47,15 @@ class GaleriaMonitorApp:
         self.animacao_var = tk.StringVar(value="Mosaic Fly-In")
         self.intensidade_animacao_var = tk.StringVar(value="Medio")
         # Navegador / gravacao: pastilha maior = menos celulas (~100-150 em Full HD com ~120 px).
-        self.navegador_pastilha_px_var = tk.IntVar(value=56)
+        # 768/20 = 38 px no telao P2.6; o front calcula largura÷20 (valor informativo).
+        self.navegador_pastilha_px_var = tk.IntVar(value=38)
         self.navegador_grade_tela_cheia_var = tk.BooleanVar(value=True)
         # Desligado por defeito: composicao foto a foto; liga para grelha cheia no video.
         self.navegador_duplicar_grade_var = tk.BooleanVar(value=False)
+        # Velocidade de montagem no telao (navegador): pastilha a pastilha ao duplicar / encher grelha.
+        self.navegador_velocidade_montagem_var = tk.IntVar(value=320)
+        # Overlay no telao: desligado por defeito; so revela com as pastilhas quando ligado.
+        self.navegador_overlay_telao_var = tk.BooleanVar(value=True)
         # Pausa entre fotos na injecao manual (painel / sensacao de ir largando).
         self.injecao_intervalo_ms_var = tk.IntVar(value=2000)
         # Vazio = usa a pasta monitorada; senao injeta nessa pasta (ex.: copiar para Galeria).
@@ -72,14 +77,9 @@ class GaleriaMonitorApp:
         screen_h = self.root.winfo_screenheight()
         self.largura_painel_var = tk.IntVar(value=max(640, screen_w // 2))
         self.altura_painel_var = tk.IntVar(value=max(360, screen_h // 2))
+        # Fundo = cena atrás das fotos (não o HALO/logo — isso vai só no overlay com revelação).
         self.backdrop_var = tk.StringVar(
-            value=self._arte_padrao(
-                "fundo.jpg",
-                "fundo_evento_1024x825.png",
-                "backdrop.png",
-                "fundobaixosemtexto.png",
-                "fundobaixo.png",
-            )
+            value=self._arte_padrao("fundo.jpg", "backdrop.png")
         )
         self.overlay_var = tk.StringVar(
             value=self._arte_padrao("logo.png", "overlay.png")
@@ -296,7 +296,7 @@ class GaleriaMonitorApp:
         backdrop_row = ttk.Frame(card_esquerdo, style="Card.TFrame")
         backdrop_row.grid(row=9, column=0, sticky="ew", pady=(6, 6))
         backdrop_row.columnconfigure(1, weight=1)
-        ttk.Label(backdrop_row, text="Fundo (atrás do mosaico)").grid(row=0, column=0, sticky="w")
+        ttk.Label(backdrop_row, text="Fundo (atrás do mosaico; não use HALO/logo)").grid(row=0, column=0, sticky="w")
         ttk.Entry(backdrop_row, textvariable=self.backdrop_var, style="App.TEntry").grid(
             row=0, column=1, sticky="ew", padx=(8, 8)
         )
@@ -307,7 +307,7 @@ class GaleriaMonitorApp:
         overlay_row = ttk.Frame(card_esquerdo, style="Card.TFrame")
         overlay_row.grid(row=10, column=0, sticky="ew", pady=(0, 10))
         overlay_row.columnconfigure(1, weight=1)
-        ttk.Label(overlay_row, text="Overlay (logo por cima)").grid(row=0, column=0, sticky="w")
+        ttk.Label(overlay_row, text="Overlay (logo revelado pelas fotos)").grid(row=0, column=0, sticky="w")
         ttk.Entry(overlay_row, textvariable=self.overlay_var, style="App.TEntry").grid(
             row=0, column=1, sticky="ew", padx=(8, 8)
         )
@@ -380,7 +380,7 @@ class GaleriaMonitorApp:
         )
         ttk.Label(
             nav_row,
-            text="40-80 px; grelha fixa 20 colunas no telao (menor = mais fotos).",
+            text="Telao: 20 colunas; topo 65% mosaico, base 35% fundo; tela cheia na TV.",
             style="Hint.TLabel",
         ).grid(row=0, column=2, sticky="w")
         ttk.Checkbutton(
@@ -391,16 +391,33 @@ class GaleriaMonitorApp:
         ).grid(row=4, column=0, sticky="w", pady=(6, 0))
         ttk.Checkbutton(
             card_direito,
-            text="Duplicar fotos para preencher toda a grelha (só no fim / exportar video)",
+            text="Duplicar fotos para preencher toda a grelha (montagem gradual no telao)",
             variable=self.navegador_duplicar_grade_var,
             style="App.TCheckbutton",
         ).grid(row=5, column=0, sticky="w", pady=(2, 0))
+        ttk.Checkbutton(
+            card_direito,
+            text="Mostrar overlay no telao (logo revelado pelas fotos)",
+            variable=self.navegador_overlay_telao_var,
+            style="App.TCheckbutton",
+        ).grid(row=6, column=0, sticky="w", pady=(4, 0))
+        nav_vel_row = ttk.Frame(card_direito, style="Card.TFrame")
+        nav_vel_row.grid(row=7, column=0, sticky="ew", pady=(6, 0))
+        ttk.Label(nav_vel_row, text="Velocidade de montagem no telao (ms)").grid(row=0, column=0, sticky="w")
+        ttk.Entry(nav_vel_row, textvariable=self.navegador_velocidade_montagem_var, width=6, style="App.TEntry").grid(
+            row=0, column=1, padx=(8, 12), sticky="w"
+        )
+        ttk.Label(
+            nav_vel_row,
+            text="Maior = mais lento e suave; menor = mais rapido (80-8000).",
+            style="Hint.TLabel",
+        ).grid(row=0, column=2, sticky="w")
 
         ttk.Label(card_direito, text="Injetar fotos (manual)", style="Section.TLabel").grid(
-            row=6, column=0, sticky="w", pady=(12, 0)
+            row=8, column=0, sticky="w", pady=(12, 0)
         )
         inj_dest_row = ttk.Frame(card_direito, style="Card.TFrame")
-        inj_dest_row.grid(row=7, column=0, sticky="ew", pady=(4, 0))
+        inj_dest_row.grid(row=9, column=0, sticky="ew", pady=(4, 0))
         inj_dest_row.columnconfigure(1, weight=1)
         ttk.Label(inj_dest_row, text="Pasta destino").grid(row=0, column=0, sticky="w")
         ttk.Entry(inj_dest_row, textvariable=self.injecao_pasta_destino_var, style="App.TEntry").grid(
@@ -410,7 +427,7 @@ class GaleriaMonitorApp:
             inj_dest_row, text="Escolher pasta…", style="Secondary.TButton", command=self._selecionar_injecao_destino
         ).grid(row=0, column=2)
         inj_imgs = ttk.Frame(card_direito, style="Card.TFrame")
-        inj_imgs.grid(row=8, column=0, sticky="ew", pady=(8, 0))
+        inj_imgs.grid(row=10, column=0, sticky="ew", pady=(8, 0))
         self._injecao_lbl_count = ttk.Label(inj_imgs, text="Nenhuma imagem na fila")
         self._injecao_lbl_count.pack(side="left")
         ttk.Button(
@@ -423,7 +440,7 @@ class GaleriaMonitorApp:
             side="left", padx=(8, 0)
         )
         inj_opts = ttk.Frame(card_direito, style="Card.TFrame")
-        inj_opts.grid(row=9, column=0, sticky="w", pady=(8, 0))
+        inj_opts.grid(row=11, column=0, sticky="w", pady=(8, 0))
         ttk.Label(inj_opts, text="Pausa entre cada injecao (ms; vazio = 2000)").pack(side="left")
         ttk.Entry(inj_opts, textvariable=self.injecao_intervalo_ms_var, width=6, style="App.TEntry").pack(
             side="left", padx=(8, 12)
@@ -435,10 +452,10 @@ class GaleriaMonitorApp:
             style="App.TCheckbutton",
         ).pack(side="left")
         inj_log_fr = ttk.LabelFrame(card_direito, text="Registo da injecao", padding=6)
-        inj_log_fr.grid(row=10, column=0, sticky="nsew", pady=(8, 6))
+        inj_log_fr.grid(row=12, column=0, sticky="nsew", pady=(8, 6))
         inj_log_fr.columnconfigure(0, weight=1)
         inj_log_fr.rowconfigure(0, weight=1)
-        card_direito.rowconfigure(10, weight=1)
+        card_direito.rowconfigure(12, weight=1)
         self._injecao_log_text = tk.Text(
             inj_log_fr,
             height=8,
@@ -455,7 +472,7 @@ class GaleriaMonitorApp:
         inj_log_sb.grid(row=0, column=1, sticky="ns")
         self._injecao_log_text.configure(yscrollcommand=inj_log_sb.set)
         inj_btn_row = ttk.Frame(card_direito, style="Card.TFrame")
-        inj_btn_row.grid(row=11, column=0, sticky="w", pady=(4, 0))
+        inj_btn_row.grid(row=13, column=0, sticky="w", pady=(4, 0))
         self._injecao_btn_injetar = ttk.Button(
             inj_btn_row, text="Injetar fila agora", style="Secondary.TButton", command=self._injecao_executar
         )
@@ -475,9 +492,9 @@ class GaleriaMonitorApp:
             "O navegador segue as animacoes; mantenha o front aberto apos Iniciar.",
             style="Hint.TLabel",
             wraplength=380,
-        ).grid(row=12, column=0, sticky="w", pady=(6, 0))
+        ).grid(row=14, column=0, sticky="w", pady=(6, 0))
 
-        ttk.Label(card_direito, text="Status", style="Section.TLabel").grid(row=13, column=0, sticky="w", pady=(10, 0))
+        ttk.Label(card_direito, text="Status", style="Section.TLabel").grid(row=15, column=0, sticky="w", pady=(10, 0))
         ttk.Label(container, textvariable=self.status_var, style="Status.TLabel").grid(row=4, column=0, sticky="w", pady=(12, 6))
         ttk.Label(container, textvariable=self.log_var, style="Log.TLabel", anchor="w").grid(
             row=5, column=0, sticky="ew"
@@ -503,6 +520,8 @@ class GaleriaMonitorApp:
             self.navegador_pastilha_px_var,
             self.navegador_grade_tela_cheia_var,
             self.navegador_duplicar_grade_var,
+            self.navegador_velocidade_montagem_var,
+            self.navegador_overlay_telao_var,
             self.injecao_intervalo_ms_var,
             self.injecao_pasta_destino_var,
             self.injecao_aplicar_moldura_var,
@@ -530,10 +549,11 @@ class GaleriaMonitorApp:
             self.web_frontend.update_settings(
                 animation_mode=self._animation_mode_key(self.animacao_var.get()),
                 animation_intensity=self.intensidade_animacao_var.get().strip().lower(),
-                tile_interval_ms=int(self.intervalo_mosaico_ms_var.get() or 360),
-                tile_size_px=max(40, min(80, int(self.navegador_pastilha_px_var.get() or 56))),
+                tile_interval_ms=int(self.navegador_velocidade_montagem_var.get() or 320),
+                tile_size_px=max(32, int(self.navegador_pastilha_px_var.get() or 38)),
                 mosaic_fullscreen=bool(self.navegador_grade_tela_cheia_var.get()),
                 duplicate_fill=bool(self.navegador_duplicar_grade_var.get()),
+                overlay_telao_enabled=bool(self.navegador_overlay_telao_var.get()),
             )
             self.web_frontend.set_backdrop_path(self._backdrop_path_efetivo())
             self.web_frontend.set_overlay_path(self._overlay_path_efetivo())
@@ -603,11 +623,16 @@ class GaleriaMonitorApp:
         animacao = self.animacao_var.get().strip() or "Soft Zoom Fade-In"
         intensidade = self.intensidade_animacao_var.get().strip() or "Medio"
         try:
-            nav_tile = max(40, min(80, int(self.navegador_pastilha_px_var.get() or 56)))
+            nav_tile = max(32, int(self.navegador_pastilha_px_var.get() or 38))
         except (tk.TclError, ValueError):
-            nav_tile = 56
+            nav_tile = 38
         nav_full = "Sim" if self.navegador_grade_tela_cheia_var.get() else "Nao"
         nav_dup = "Sim" if self.navegador_duplicar_grade_var.get() else "Nao"
+        nav_ov = "Sim" if self.navegador_overlay_telao_var.get() else "Nao"
+        try:
+            nav_vel = max(80, min(8000, int(self.navegador_velocidade_montagem_var.get() or 320)))
+        except (tk.TclError, ValueError):
+            nav_vel = 320
         try:
             pausa_mon = max(0, min(120, int(self.pausa_entre_fotos_monitor_var.get() or 0)))
         except (tk.TclError, ValueError):
@@ -631,7 +656,8 @@ class GaleriaMonitorApp:
             f"- Grade estimada: {colunas} x {linhas} ({total} fotos)\n"
             f"- Intervalo entre fotos no painel: {intervalo_ms} ms\n"
             f"- Animacao: {animacao} ({intensidade})\n"
-            f"- Navegador: telao 768x960, pastilha {nav_tile} px, tela cheia {nav_full}, duplicar grelha {nav_dup}\n"
+            f"- Navegador: telao 768x960, 20 colunas (~{nav_tile}px/celula), tela cheia {nav_full}, "
+            f"duplicar grelha {nav_dup}, overlay telao {nav_ov}, montagem {nav_vel} ms\n"
             f"- Fundo (telao): {self._backdrop_resumo()} | Overlay (logo): {self._overlay_resumo()}"
         )
         self.summary_var.set(resumo)
@@ -734,6 +760,16 @@ class GaleriaMonitorApp:
                 return str(p.resolve())
         return ""
 
+    @staticmethod
+    def _is_halo_ou_mascara_video(path: Path) -> bool:
+        """Arte de marca/HALO ou máscara de vídeo — não usar como fundo do telão."""
+        stem = path.stem.lower()
+        if stem.startswith("fundo_evento"):
+            return True
+        if "halo" in stem or stem in ("logo", "overlay", "logopicbrand"):
+            return True
+        return False
+
     def _backdrop_path_efetivo(self) -> str | None:
         raw = self.backdrop_var.get().strip()
         if not raw:
@@ -741,14 +777,23 @@ class GaleriaMonitorApp:
         p = Path(raw)
         if not p.is_file():
             return None
+        if self._is_halo_ou_mascara_video(p):
+            return None
+        ov = self._overlay_path_efetivo()
+        if ov and str(p.resolve()) == ov:
+            return None
         return str(p.resolve())
 
     def _backdrop_resumo(self) -> str:
         raw = self.backdrop_var.get().strip()
         if not raw:
             return "Nao (preto)"
-        if self._backdrop_path_efetivo():
+        efetivo = self._backdrop_path_efetivo()
+        if efetivo:
             return "Sim"
+        p = Path(raw)
+        if p.is_file() and self._is_halo_ou_mascara_video(p):
+            return "Ignorado no telao (HALO/logo — use em Overlay)"
         return "Caminho invalido"
 
     def _overlay_path_efetivo(self) -> str | None:
