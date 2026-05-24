@@ -25,7 +25,7 @@ COLS = VIDEO_W // TILE_SIZE        # 20  (20 * 38 = 760)
 ROWS = VIDEO_H // TILE_SIZE        # 25  (25 * 38 = 950)
 TOTAL_CELLS = COLS * ROWS          # 500
 BG_BGR = (18, 15, 12)              # fallback if no backdrop provided
-OVERLAY_TINT_ALPHA = 0.96
+OVERLAY_TINT_ALPHA = 1.0
 
 _PROJECT_DIR = Path(__file__).parent
 
