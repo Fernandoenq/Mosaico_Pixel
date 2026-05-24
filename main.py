@@ -99,6 +99,10 @@ class GaleriaMonitorApp:
         self._mosaic_feed_after_id = None
         self._resumo_web_after_id = None
 
+        self._video_gen_thread: threading.Thread | None = None
+        self._btn_gerar_video: ttk.Button | None = None
+        self._video_status_var = tk.StringVar(value="")
+
         self._configurar_estilo()
         self._build_ui()
         self._registrar_bindings()
@@ -239,8 +243,39 @@ class GaleriaMonitorApp:
         card_esquerdo.columnconfigure(0, weight=1)
 
         card_direito = ttk.Frame(scroll_inner, padding=14, style="Card.TFrame")
-        card_direito.grid(row=1, column=0, sticky="ew")
+        card_direito.grid(row=1, column=0, sticky="ew", pady=(0, 10))
         card_direito.columnconfigure(0, weight=1)
+
+        card_video = ttk.Frame(scroll_inner, padding=14, style="Card.TFrame")
+        card_video.grid(row=2, column=0, sticky="ew")
+        card_video.columnconfigure(0, weight=1)
+
+        ttk.Label(card_video, text="Video Mosaico (768x960, 4:5)", style="Section.TLabel").grid(
+            row=0, column=0, sticky="w"
+        )
+        ttk.Label(
+            card_video,
+            text="Gera intro_mosaico.mp4 (tiles entrando) e outro_mosaico.mp4 (tiles saindo) "
+                 "com as fotos atuais da pasta MOSAIC. "
+                 "O video de entrada toca automaticamente ao completar o mosaico; "
+                 "o de saida ao limpar.",
+            style="Hint.TLabel",
+            wraplength=600,
+        ).grid(row=1, column=0, sticky="w", pady=(4, 8))
+
+        vid_btn_row = ttk.Frame(card_video, style="Card.TFrame")
+        vid_btn_row.grid(row=2, column=0, sticky="w")
+        self._btn_gerar_video = ttk.Button(
+            vid_btn_row,
+            text="Gerar videos de entrada e saida",
+            style="Primary.TButton",
+            command=self._gerar_videos_mosaico,
+        )
+        self._btn_gerar_video.pack(side="left")
+
+        ttk.Label(card_video, textvariable=self._video_status_var, style="Hint.TLabel").grid(
+            row=3, column=0, sticky="w", pady=(6, 0)
+        )
 
         ttk.Label(card_esquerdo, text="Pasta monitorada", style="Section.TLabel").grid(row=0, column=0, sticky="w")
         pasta_row = ttk.Frame(card_esquerdo, style="Card.TFrame")
@@ -1278,6 +1313,118 @@ class GaleriaMonitorApp:
         self.btn_iniciar.config(state="normal")
         self.btn_parar.config(state="disabled")
         self.status_var.set("Status: Parando...")
+
+    def _gerar_videos_mosaico(self):
+        pasta_mosaic = _PROJECT_DIR / "MOSAIC"
+        exts = {".jpg", ".jpeg", ".png", ".bmp", ".webp", ".jfif"}
+        arquivos = [f for f in pasta_mosaic.iterdir() if f.is_file() and f.suffix.lower() in exts]
+        if not arquivos:
+            messagebox.showinfo(
+                "Video Mosaico",
+                "A pasta MOSAIC esta vazia. Adicione fotos antes de gerar os videos.",
+            )
+            return
+
+        if self._video_gen_thread and self._video_gen_thread.is_alive():
+            return
+
+        if self._btn_gerar_video:
+            try:
+                self._btn_gerar_video.config(state="disabled")
+            except tk.TclError:
+                pass
+        self._video_status_var.set("Gerando videos...")
+
+        backdrop_raw = self._backdrop_path_efetivo()
+        backdrop_path = Path(backdrop_raw) if backdrop_raw else None
+        overlay_raw = self._overlay_path_efetivo()
+        overlay_path = Path(overlay_raw) if overlay_raw else None
+
+        def generate():
+            import subprocess, sys as _sys
+
+            # Total de frames para calcular progresso (constantes fixas)
+            total_intro = int((9.0 + 2.0) * 30)   # 330
+            total_outro = int((1.0 + 7.0) * 30)   # 240
+
+            cmd = [_sys.executable, str(_PROJECT_DIR / "criar_video_mosaico.py"),
+                   "--pasta",   str(pasta_mosaic),
+                   "--out-dir", str(_PROJECT_DIR)]
+            if backdrop_path:
+                cmd.extend(["--backdrop", str(backdrop_path)])
+            if overlay_path:
+                cmd.extend(["--overlay", str(overlay_path)])
+
+            ok_i = False
+            ok_o = False
+            try:
+                proc = subprocess.Popen(
+                    cmd,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    cwd=str(_PROJECT_DIR),
+                )
+                for line in proc.stdout:
+                    line = line.strip()
+                    if line.startswith("PROGRESS:"):
+                        parts = line.split(":")
+                        if len(parts) == 4:
+                            tipo = parts[1]
+                            fi = int(parts[2])
+                            if tipo == "intro":
+                                pct = int(fi / max(1, total_intro) * 100)
+                                msg = f"Gerando intro... {pct}%"
+                            else:
+                                pct = int(fi / max(1, total_outro) * 100)
+                                msg = f"Gerando outro... {pct}%"
+                            try:
+                                self.root.after(0, lambda m=msg: self._video_status_var.set(m))
+                            except tk.TclError:
+                                pass
+                    elif line == "DONE:intro:ok":
+                        ok_i = True
+                    elif line == "DONE:outro:ok":
+                        ok_o = True
+                    elif line == "ERRO:MOSAIC_VAZIA":
+                        break
+                proc.wait()
+            except Exception as exc:
+                def err(e=str(exc)):
+                    self._video_status_var.set(f"Erro: {e}")
+                    if self._btn_gerar_video:
+                        try:
+                            self._btn_gerar_video.config(state="normal")
+                        except tk.TclError:
+                            pass
+                try:
+                    self.root.after(0, err)
+                except tk.TclError:
+                    pass
+                return
+
+            try:
+                self.web_frontend.set_videos_ready(intro=ok_i, outro=ok_o)
+            except Exception:
+                pass
+
+            def finalizar():
+                parts = []
+                parts.append("intro_mosaico.mp4 OK" if ok_i else "intro FALHOU")
+                parts.append("outro_mosaico.mp4 OK" if ok_o else "outro FALHOU")
+                self._video_status_var.set(" | ".join(parts))
+                if self._btn_gerar_video:
+                    try:
+                        self._btn_gerar_video.config(state="normal")
+                    except tk.TclError:
+                        pass
+            try:
+                self.root.after(0, finalizar)
+            except tk.TclError:
+                pass
+
+        self._video_gen_thread = threading.Thread(target=generate, daemon=True)
+        self._video_gen_thread.start()
 
     def _limpar_mosaico(self):
         total_arquivos_removidos = 0

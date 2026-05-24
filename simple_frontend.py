@@ -11,6 +11,7 @@ import mimetypes
 import re
 import shutil
 import threading
+import time
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -389,6 +390,17 @@ HTML_PAGE = """<!doctype html>
     #spotlightImg.spotlight-ready {
       opacity: 1;
     }
+    #mosaicVideo {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      z-index: 9;
+      object-fit: fill;
+      display: none;
+      pointer-events: none;
+      background: #000;
+    }
   </style>
 </head>
 <body>
@@ -403,6 +415,7 @@ HTML_PAGE = """<!doctype html>
     <div class="spotlight" id="spotlight">
       <img id="spotlightImg" alt="Nova imagem" />
     </div>
+    <video id="mosaicVideo" playsinline muted></video>
   </div>
 
   <script>
@@ -2542,6 +2555,39 @@ HTML_PAGE = """<!doctype html>
       }, 280);
     });
 
+    /* --- Vídeo de entrada / saída do mosaico --- */
+    const mosaicVideo = document.getElementById('mosaicVideo');
+    let videoPolling = false;
+
+    function pollVideoStatus() {
+      if (videoPolling) return;
+      videoPolling = true;
+      fetch('/api/video/status', { cache: 'no-store' })
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+          videoPolling = false;
+          if (data.play && mosaicVideo.style.display === 'none') {
+            startMosaicVideo(data.play);
+          }
+        })
+        .catch(function() { videoPolling = false; });
+    }
+
+    function startMosaicVideo(type) {
+      mosaicVideo.src = '/video/' + type + '_mosaico.mp4?_t=' + Date.now();
+      mosaicVideo.style.display = 'block';
+      mosaicVideo.load();
+      mosaicVideo.play().catch(function() {});
+      mosaicVideo.onended = function() {
+        mosaicVideo.style.display = 'none';
+        mosaicVideo.src = '';
+        mosaicVideo.onended = null;
+        fetch('/api/video/clear', { cache: 'no-store' }).catch(function() {});
+      };
+    }
+
+    setInterval(pollVideoStatus, 2000);
+
     /* Recarregue com Ctrl+F5 apos atualizar o codigo (reload automatico desativado). */
   </script>
 </body>
@@ -2606,6 +2652,54 @@ class _FrontendHandler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
         self._safe_write(self.wfile, body)
+
+    def _serve_video(self, file_path: Path):
+        try:
+            file_size = file_path.stat().st_size
+        except OSError:
+            self.send_error(404)
+            return
+        range_header = self.headers.get("Range", "")
+        try:
+            if range_header.startswith("bytes="):
+                spec = range_header[6:]
+                start_s, end_s = spec.split("-", 1)
+                start = int(start_s) if start_s.strip() else 0
+                end = int(end_s) if end_s.strip() else min(file_size - 1, start + 1024 * 512)
+                end = min(end, file_size - 1)
+                length = max(0, end - start + 1)
+                self.send_response(206)
+                self.send_header("Content-Type", "video/mp4")
+                self.send_header("Content-Range", f"bytes {start}-{end}/{file_size}")
+                self.send_header("Content-Length", str(length))
+                self.send_header("Accept-Ranges", "bytes")
+                self.end_headers()
+                with file_path.open("rb") as f:
+                    f.seek(start)
+                    remaining = length
+                    while remaining > 0:
+                        chunk = f.read(min(65536, remaining))
+                        if not chunk:
+                            break
+                        if not self._safe_write(self.wfile, chunk):
+                            break
+                        remaining -= len(chunk)
+            else:
+                self.send_response(200)
+                self.send_header("Content-Type", "video/mp4")
+                self.send_header("Content-Length", str(file_size))
+                self.send_header("Accept-Ranges", "bytes")
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                with file_path.open("rb") as f:
+                    while True:
+                        chunk = f.read(65536)
+                        if not chunk:
+                            break
+                        if not self._safe_write(self.wfile, chunk):
+                            break
+        except Exception:
+            pass
 
     def do_GET(self):  # noqa: N802
         try:
@@ -2693,6 +2787,27 @@ class _FrontendHandler(BaseHTTPRequestHandler):
             self._safe_write(self.wfile, body)
             return
 
+        if path == "/api/video/status":
+            self._send_json(self.server_ref.build_video_status())
+            return
+
+        if path == "/api/video/clear":
+            self.server_ref.clear_video_queue()
+            self._send_json({"ok": True})
+            return
+
+        if path.startswith("/video/"):
+            name = path.removeprefix("/video/").split("?")[0]
+            if not name.endswith(".mp4") or "/" in name or ".." in name:
+                self.send_error(404)
+                return
+            video_path = (_PROJECT_DIR / name).resolve()
+            if not str(video_path).startswith(str(_PROJECT_DIR.resolve())) or not video_path.is_file():
+                self.send_error(404)
+                return
+            self._serve_video(video_path)
+            return
+
         self.send_error(404)
 
 
@@ -2733,8 +2848,20 @@ class SimpleMosaicFrontend:
         self._snapshots_after_gen: dict[int, frozenset[str]] = {0: frozenset()}
         self._serve_cache_dir = self.mosaic_dir / ".serve_cache"
 
+        self._video_to_play: str | None = None
+        self._video_to_play_until: float = 0.0
+        self._video_intro_ready: bool = False
+        self._video_outro_ready: bool = False
+        self._mosaic_was_full: bool = False
+        self._video_lock = threading.Lock()
+
     def reset_mosaic_catalog(self) -> None:
         """Zera lista em cache apos limpar a pasta MOSAIC."""
+        with self._video_lock:
+            if self._video_outro_ready and self._mosaic_was_full:
+                self._video_to_play = "outro"
+                self._video_to_play_until = time.time() + 60.0
+            self._mosaic_was_full = False
         with self._catalog_lock:
             self._mosaic_generation = 0
             self._images_list_cache = None
@@ -2823,6 +2950,16 @@ class SimpleMosaicFrontend:
                         self._snapshots_after_gen.pop(g, None)
         self._images_list_cache = None
         self._images_list_mtime = None
+
+        if self._video_intro_ready:
+            count = len(entries)
+            with self._video_lock:
+                if count >= 500 and not self._mosaic_was_full:
+                    self._mosaic_was_full = True
+                    self._video_to_play = "intro"
+                    self._video_to_play_until = time.time() + 60.0
+                elif count < 500:
+                    self._mosaic_was_full = False
 
     def _mosaic_order_key(self, path: Path):
         m = re.match(r"^img(\d+)$", path.stem.lower())
@@ -3128,4 +3265,29 @@ class SimpleMosaicFrontend:
         self._httpd.server_close()
         self._httpd = None
         self._is_running = False
+
+    def set_videos_ready(self, intro: bool = False, outro: bool = False) -> None:
+        with self._video_lock:
+            self._video_intro_ready = intro
+            self._video_outro_ready = outro
+
+    def queue_video(self, which: str) -> None:
+        with self._video_lock:
+            self._video_to_play = which
+            self._video_to_play_until = time.time() + 60.0
+
+    def clear_video_queue(self) -> None:
+        with self._video_lock:
+            self._video_to_play = None
+
+    def build_video_status(self) -> dict:
+        with self._video_lock:
+            play = None
+            if self._video_to_play and time.time() < self._video_to_play_until:
+                play = self._video_to_play
+            return {
+                "play": play,
+                "ready_intro": self._video_intro_ready,
+                "ready_outro": self._video_outro_ready,
+            }
 
