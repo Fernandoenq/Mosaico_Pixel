@@ -81,11 +81,13 @@ def _load_backdrop(backdrop_path: Path | None) -> np.ndarray:
     return np.full((VIDEO_H, VIDEO_W, 3), BG_BGR, dtype=np.uint8)
 
 
-def _prep_overlay(overlay_path: Path | None):
-    """Returns (bgr_canvas, alpha_canvas) float32 arrays, or None.
+def _prep_overlay(overlay_path: Path | None) -> np.ndarray | None:
+    """Retorna weight (VIDEO_H, VIDEO_W, 3) float32 para multiply blend, ou None.
 
-    Logo escalado 1.5× e centralizado. bgr_canvas e alpha_canvas têm shape
-    (VIDEO_H, VIDEO_W, 3) e (VIDEO_H, VIDEO_W, 1) respectivamente.
+    Replica exatamente o front:
+      1. Logo desenhado com globalAlpha=OVERLAY_TINT_ALPHA
+      2. Mascarado por destination-in (só onde há tiles)
+      3. mix-blend-mode: multiply → weight[y,x] = 1 - alpha*tint*(1 - logo_bgr)
     """
     if not overlay_path or not overlay_path.is_file():
         return None
@@ -98,7 +100,8 @@ def _prep_overlay(overlay_path: Path | None):
         img = img.resize((fw, fh), Image.LANCZOS)
         arr = np.asarray(img, dtype=np.float32) / 255.0  # (fh, fw, 4) RGBA
 
-        bgr_f = np.zeros((VIDEO_H, VIDEO_W, 3), dtype=np.float32)
+        # neutral para multiply = 1.0 (1*frame = frame, sem efeito fora do logo)
+        bgr_f = np.ones((VIDEO_H, VIDEO_W, 3), dtype=np.float32)
         alpha_f = np.zeros((VIDEO_H, VIDEO_W, 1), dtype=np.float32)
 
         ox = (VIDEO_W - fw) // 2
@@ -116,24 +119,24 @@ def _prep_overlay(overlay_path: Path | None):
             bgr_f[dy0:dy0 + ph, dx0:dx0 + pw, 2] = patch[:, :, 0]  # R
             alpha_f[dy0:dy0 + ph, dx0:dx0 + pw, 0] = patch[:, :, 3]
 
-        return bgr_f.astype(np.float32), alpha_f.astype(np.float32)
+        # weight = 1 - source_alpha*(1 - logo_bgr)  →  frame*weight = multiply blend
+        source_alpha = alpha_f * OVERLAY_TINT_ALPHA
+        return (1.0 - source_alpha * (1.0 - bgr_f)).astype(np.float32)
     except Exception:
         return None
 
 
-def _apply_overlay(frame: np.ndarray, overlay_data, tile_mask: np.ndarray | None) -> np.ndarray:
-    """Composita o logo por cima do frame onde tile_mask > 0 (alpha composite normal).
+def _apply_overlay(frame: np.ndarray, ov_weight: np.ndarray | None, tile_mask: np.ndarray | None) -> np.ndarray:
+    """Aplica multiply blend onde tile_mask > 0 — igual ao front (destination-in + multiply).
 
-    O logo aparece como camada sólida sobre as fotos com opacidade OVERLAY_TINT_ALPHA.
     tile_mask: (VIDEO_H, VIDEO_W, 1) float32, 1=tile presente, 0=fundo.
     """
-    if overlay_data is None or tile_mask is None:
+    if ov_weight is None or tile_mask is None:
         return frame
-    logo_bgr, logo_alpha = overlay_data
     frame_f = frame.astype(np.float32) / 255.0
-    blend = logo_alpha * tile_mask * OVERLAY_TINT_ALPHA
-    result = frame_f * (1.0 - blend) + logo_bgr * blend
-    return (result * 255.0).clip(0, 255).astype(np.uint8)
+    # onde tile_mask=1 → multiply; onde tile_mask=0 → weight neutro (1) = sem efeito
+    effective = 1.0 - tile_mask * (1.0 - ov_weight)
+    return (frame_f * effective * 255.0).clip(0, 255).astype(np.uint8)
 
 
 def _tile_center(cell_idx: int) -> tuple[int, int]:
@@ -218,7 +221,7 @@ def gerar_intro(
     if not images:
         return False
 
-    ov_data = _prep_overlay(overlay_path)
+    ov_weight = _prep_overlay(overlay_path)
     rng = random.Random(42)
     dirs = ["left", "right", "top", "bottom"]
     tile_dirs = [rng.choice(dirs) for _ in range(TOTAL_CELLS)]
@@ -243,7 +246,7 @@ def gerar_intro(
     for ci in range(TOTAL_CELLS):
         tx, ty = centers[ci]
         _draw_tile(full_frame, images[ci], float(tx), float(ty), 1.0, mask=full_mask)
-    full_frame_ov = _apply_overlay(full_frame, ov_data, full_mask)
+    full_frame_ov = _apply_overlay(full_frame, ov_weight, full_mask)
 
     for fi in range(total_frames):
         t = fi / FPS
@@ -265,7 +268,7 @@ def gerar_intro(
                     ep = _ease_out((t - t0) / ANIM_TILE_SECS)
                     sx, sy = fly_starts[ci]
                     _draw_tile(frame, img, sx + (tx - sx) * ep, sy + (ty - sy) * ep, max(0.1, ep), mask=tile_mask)
-            out.write(_apply_overlay(frame, ov_data, tile_mask))
+            out.write(_apply_overlay(frame, ov_weight, tile_mask))
         if callback:
             callback(fi, total_frames, "intro")
 
@@ -295,7 +298,7 @@ def gerar_outro(
     if not images:
         return False
 
-    ov_data = _prep_overlay(overlay_path)
+    ov_weight = _prep_overlay(overlay_path)
     rng = random.Random(42)
     dirs = ["left", "right", "top", "bottom"]
     tile_dirs = [rng.choice(dirs) for _ in range(TOTAL_CELLS)]
@@ -330,7 +333,7 @@ def gerar_outro(
                 sx, sy = fly_starts[ci]
                 _draw_tile(frame, img, tx + (sx - tx) * ep, ty + (sy - ty) * ep, max(0.1, 1.0 - ep * 0.9), mask=tile_mask)
             # else: tile has left — not drawn, mask stays 0
-        out.write(_apply_overlay(frame, ov_data, tile_mask))
+        out.write(_apply_overlay(frame, ov_weight, tile_mask))
         if callback:
             callback(fi, total_frames, "outro")
 
