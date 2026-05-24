@@ -25,7 +25,7 @@ COLS = VIDEO_W // TILE_SIZE        # 20  (20 * 38 = 760)
 ROWS = VIDEO_H // TILE_SIZE        # 25  (25 * 38 = 950)
 TOTAL_CELLS = COLS * ROWS          # 500
 BG_BGR = (18, 15, 12)              # fallback if no backdrop provided
-OVERLAY_TINT_ALPHA = 1.0
+OVERLAY_TINT_ALPHA = 0.96
 
 _PROJECT_DIR = Path(__file__).parent
 
@@ -81,13 +81,10 @@ def _load_backdrop(backdrop_path: Path | None) -> np.ndarray:
     return np.full((VIDEO_H, VIDEO_W, 3), BG_BGR, dtype=np.uint8)
 
 
-def _prep_overlay(overlay_path: Path | None) -> np.ndarray | None:
-    """Retorna weight (VIDEO_H, VIDEO_W, 3) float32 para multiply blend, ou None.
+def _prep_overlay(overlay_path: Path | None):
+    """Retorna (bgr_canvas, alpha_canvas) float32 para alpha composite, ou None.
 
-    Replica exatamente o front:
-      1. Logo desenhado com globalAlpha=OVERLAY_TINT_ALPHA
-      2. Mascarado por destination-in (só onde há tiles)
-      3. mix-blend-mode: multiply → weight[y,x] = 1 - alpha*tint*(1 - logo_bgr)
+    Logo escalado 1.5× e centralizado — overlay por cima das fotos.
     """
     if not overlay_path or not overlay_path.is_file():
         return None
@@ -100,8 +97,7 @@ def _prep_overlay(overlay_path: Path | None) -> np.ndarray | None:
         img = img.resize((fw, fh), Image.LANCZOS)
         arr = np.asarray(img, dtype=np.float32) / 255.0  # (fh, fw, 4) RGBA
 
-        # neutral para multiply = 1.0 (1*frame = frame, sem efeito fora do logo)
-        bgr_f = np.ones((VIDEO_H, VIDEO_W, 3), dtype=np.float32)
+        bgr_f = np.zeros((VIDEO_H, VIDEO_W, 3), dtype=np.float32)
         alpha_f = np.zeros((VIDEO_H, VIDEO_W, 1), dtype=np.float32)
 
         ox = (VIDEO_W - fw) // 2
@@ -119,24 +115,23 @@ def _prep_overlay(overlay_path: Path | None) -> np.ndarray | None:
             bgr_f[dy0:dy0 + ph, dx0:dx0 + pw, 2] = patch[:, :, 0]  # R
             alpha_f[dy0:dy0 + ph, dx0:dx0 + pw, 0] = patch[:, :, 3]
 
-        # weight = 1 - source_alpha*(1 - logo_bgr)  →  frame*weight = multiply blend
-        source_alpha = alpha_f * OVERLAY_TINT_ALPHA
-        return (1.0 - source_alpha * (1.0 - bgr_f)).astype(np.float32)
+        return bgr_f.astype(np.float32), alpha_f.astype(np.float32)
     except Exception:
         return None
 
 
-def _apply_overlay(frame: np.ndarray, ov_weight: np.ndarray | None, tile_mask: np.ndarray | None) -> np.ndarray:
-    """Aplica multiply blend onde tile_mask > 0 — igual ao front (destination-in + multiply).
+def _apply_overlay(frame: np.ndarray, ov_weight, tile_mask: np.ndarray | None) -> np.ndarray:
+    """Composita o logo por cima do frame onde tile_mask > 0 (alpha composite).
 
     tile_mask: (VIDEO_H, VIDEO_W, 1) float32, 1=tile presente, 0=fundo.
     """
     if ov_weight is None or tile_mask is None:
         return frame
+    logo_bgr, logo_alpha = ov_weight
     frame_f = frame.astype(np.float32) / 255.0
-    # onde tile_mask=1 → multiply; onde tile_mask=0 → weight neutro (1) = sem efeito
-    effective = 1.0 - tile_mask * (1.0 - ov_weight)
-    return (frame_f * effective * 255.0).clip(0, 255).astype(np.uint8)
+    blend = logo_alpha * tile_mask * OVERLAY_TINT_ALPHA
+    result = frame_f * (1.0 - blend) + logo_bgr * blend
+    return (result * 255.0).clip(0, 255).astype(np.uint8)
 
 
 def _tile_center(cell_idx: int) -> tuple[int, int]:
