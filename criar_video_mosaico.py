@@ -33,7 +33,7 @@ INTRO_FILL_SECS = 9.0
 INTRO_HOLD_SECS = 2.0
 OUTRO_HOLD_SECS = 1.0
 OUTRO_CLEAR_SECS = 7.0
-ANIM_TILE_SECS = 0.45
+ANIM_TILE_SECS = 1.5
 
 
 def _ease_out(t: float) -> float:
