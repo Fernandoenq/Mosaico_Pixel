@@ -444,6 +444,10 @@ HTML_PAGE = """<!doctype html>
     let currentSpotlightSrc = null;
     let spotlightFlyAnim = null;
     const SPOTLIGHT_GAP_MS_DEFAULT = 1000;
+    let idleSpotlight = false;
+    let idleSpotlightTimer = null;
+    let idleSpotlightPool = [];
+    const IDLE_SPOTLIGHT_DELAY_MS = 4000;
     const MOSAIC_FLY_POP_MS = 640;
     const MOSAIC_FLY_HOLD_MS_DEFAULT = 1250;
     const MOSAIC_FLY_DURATION_MS = 720;
@@ -1717,6 +1721,7 @@ HTML_PAGE = """<!doctype html>
       feederAwaitingSpotlight = false;
       if (!pendingQueue.length) {
         feederRunning = false;
+        scheduleIdleSpotlight();
         return;
       }
       feederTimer = setTimeout(feedStep, spotlightGapMs());
@@ -1787,20 +1792,23 @@ HTML_PAGE = """<!doctype html>
     }
 
     function finishSpotlightCycle(opts) {
+      const wasIdle = idleSpotlight;
+      idleSpotlight = false;
       if (!spotlightActive && !(opts && opts.locked)) {
-        if (currentSpotlightSrc) {
+        if (!wasIdle && currentSpotlightSrc) {
           setTileInMosaic(currentSpotlightSrc);
-          currentSpotlightSrc = null;
         }
+        currentSpotlightSrc = null;
         pumpSpotlightQueue();
         continueFeederAfterSpotlight();
+        if (wasIdle) scheduleIdleSpotlight();
         return;
       }
       const alreadyLocked = opts && opts.locked;
       clearSpotlightTimers();
       cancelOverlayRevealTrack();
       spotlightActive = false;
-      if (!alreadyLocked && currentSpotlightSrc) {
+      if (!wasIdle && !alreadyLocked && currentSpotlightSrc) {
         setTileInMosaic(currentSpotlightSrc);
       }
       currentSpotlightSrc = null;
@@ -1808,6 +1816,7 @@ HTML_PAGE = """<!doctype html>
       if (overlayRevealIsActive()) redrawOverlay();
       pumpSpotlightQueue();
       continueFeederAfterSpotlight();
+      if (wasIdle) scheduleIdleSpotlight();
     }
 
     function revealSpotlightUI() {
@@ -1843,6 +1852,59 @@ HTML_PAGE = """<!doctype html>
       }
       spotlightQueue.push(src);
       pumpSpotlightQueue();
+    }
+
+    function scheduleIdleSpotlight(delayMs) {
+      if (idleSpotlightTimer) clearTimeout(idleSpotlightTimer);
+      idleSpotlightTimer = setTimeout(tryIdleSpotlight, delayMs !== undefined ? delayMs : IDLE_SPOTLIGHT_DELAY_MS);
+    }
+
+    function tryIdleSpotlight() {
+      idleSpotlightTimer = null;
+      if (!shouldShowSpotlight()) return;
+      if (spotlightActive || spotlightQueue.length || pendingQueue.length || feederRunning) {
+        scheduleIdleSpotlight();
+        return;
+      }
+      if (!renderedSet.size) return;
+      // Rebuild pool shuffled quando esgota
+      if (!idleSpotlightPool.length) {
+        idleSpotlightPool = Array.from(renderedSet).sort(function() { return Math.random() - 0.5; });
+      }
+      const key = idleSpotlightPool.shift();
+      if (!key) { scheduleIdleSpotlight(); return; }
+      const node = srcToNode.get(key);
+      const img = node && node.querySelector('.tile-photo');
+      const url = img && (img.getAttribute('src') || img.src);
+      if (!url) { scheduleIdleSpotlight(); return; }
+      idleSpotlight = true;
+      // Mostra usando classic (sem fly-to-cell): foto já está no mosaico
+      currentSpotlightSrc = url;
+      spotlightProbe = null;
+      cancelSpotlightFlyAnim();
+      resetSpotlightFlyInline();
+      spotlightImg.classList.remove('spotlight-ready');
+      spotlightImg.style.opacity = '0';
+      spotlightImg.removeAttribute('src');
+      spotlightImg.style.width = '0';
+      spotlightImg.style.height = '0';
+      const probe = new Image();
+      spotlightProbe = probe;
+      probe.onload = function() {
+        if (spotlightProbe !== probe || currentSpotlightSrc !== url) return;
+        fitSpotlightSize(probe.naturalWidth || 1200, probe.naturalHeight || 1600);
+        spotlightImg.src = url;
+        spotlightImg.style.opacity = '1';
+        revealSpotlightClassic();
+      };
+      probe.onerror = function() {
+        if (spotlightProbe !== probe || currentSpotlightSrc !== url) return;
+        fitSpotlightSize(1200, 1600);
+        spotlightImg.src = url;
+        spotlightImg.style.opacity = '1';
+        revealSpotlightClassic();
+      };
+      probe.src = url;
     }
 
     function showSpotlightNow(src) {
