@@ -2858,8 +2858,8 @@ class SimpleMosaicFrontend:
     def reset_mosaic_catalog(self) -> None:
         """Zera lista em cache apos limpar a pasta MOSAIC."""
         with self._video_lock:
-            if self._video_outro_ready and self._mosaic_was_full:
-                self._video_to_play = "outro"
+            if self._video_intro_ready:
+                self._video_to_play = "intro"
                 self._video_to_play_until = time.time() + 60.0
             self._mosaic_was_full = False
         with self._catalog_lock:
@@ -2951,15 +2951,15 @@ class SimpleMosaicFrontend:
         self._images_list_cache = None
         self._images_list_mtime = None
 
-        if self._video_intro_ready:
-            count = len(entries)
-            with self._video_lock:
-                if count >= 500 and not self._mosaic_was_full:
-                    self._mosaic_was_full = True
-                    self._video_to_play = "intro"
+        count = len(entries)
+        with self._video_lock:
+            if count >= 500 and not self._mosaic_was_full:
+                self._mosaic_was_full = True
+                if self._video_outro_ready:
+                    self._video_to_play = "outro"
                     self._video_to_play_until = time.time() + 60.0
-                elif count < 500:
-                    self._mosaic_was_full = False
+            elif count < 500:
+                self._mosaic_was_full = False
 
     def _mosaic_order_key(self, path: Path):
         m = re.match(r"^img(\d+)$", path.stem.lower())
