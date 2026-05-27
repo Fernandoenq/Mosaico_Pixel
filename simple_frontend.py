@@ -2628,7 +2628,7 @@ HTML_PAGE = """<!doctype html>
         .then(function(r) { return r.json(); })
         .then(function(data) {
           videoPolling = false;
-          if (data.play && mosaicVideo.style.display === 'none') {
+          if (data.play && mosaicVideo.style.display !== 'block') {
             startMosaicVideo(data.play);
           }
         })
@@ -2920,7 +2920,7 @@ class SimpleMosaicFrontend:
     def reset_mosaic_catalog(self) -> None:
         """Zera lista em cache apos limpar a pasta MOSAIC."""
         with self._video_lock:
-            if self._video_intro_ready:
+            if (_PROJECT_DIR / "intro_mosaico.mp4").is_file():
                 self._video_to_play = "intro"
                 self._video_to_play_until = time.time() + 60.0
             self._mosaic_was_full = False
@@ -3017,7 +3017,7 @@ class SimpleMosaicFrontend:
         with self._video_lock:
             if count >= 500 and not self._mosaic_was_full:
                 self._mosaic_was_full = True
-                if self._video_outro_ready:
+                if (_PROJECT_DIR / "outro_mosaico.mp4").is_file():
                     self._video_to_play = "outro"
                     self._video_to_play_until = time.time() + 60.0
             elif count < 500:
