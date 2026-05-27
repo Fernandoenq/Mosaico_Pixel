@@ -2636,11 +2636,21 @@ HTML_PAGE = """<!doctype html>
     }
 
     function startMosaicVideo(type) {
-      mosaicVideo.src = '/video/' + type + '_mosaico.mp4?_t=' + Date.now();
+      const url = '/video/' + type + '_mosaico.mp4?_t=' + Date.now();
+      console.log('[video] iniciando', url);
+      mosaicVideo.src = url;
       mosaicVideo.style.display = 'block';
       mosaicVideo.load();
-      mosaicVideo.play().catch(function() {});
+      mosaicVideo.play().then(function() {
+        console.log('[video] tocando OK');
+      }).catch(function(err) {
+        console.error('[video] erro ao tocar:', err);
+      });
+      mosaicVideo.onerror = function() {
+        console.error('[video] erro de carregamento, src:', mosaicVideo.src);
+      };
       mosaicVideo.onended = function() {
+        console.log('[video] terminou');
         mosaicVideo.style.display = 'none';
         mosaicVideo.src = '';
         mosaicVideo.onended = null;
@@ -2650,6 +2660,11 @@ HTML_PAGE = """<!doctype html>
 
     setInterval(pollVideoStatus, 2000);
 
+    /* Botao de teste — clique para tocar o outro imediatamente */
+    document.addEventListener('keydown', function(e) {
+      if (e.key === 'o' || e.key === 'O') startMosaicVideo('outro');
+      if (e.key === 'i' || e.key === 'I') startMosaicVideo('intro');
+    });
     /* Recarregue com Ctrl+F5 apos atualizar o codigo (reload automatico desativado). */
   </script>
 </body>
