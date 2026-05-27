@@ -775,7 +775,7 @@ HTML_PAGE = """<!doctype html>
     function fitLogoInMosaicArea(nw, nh) {
       const shellW = Math.max(1, telaoShell ? telaoShell.clientWidth : TELAO_REF_W);
       const shellH = Math.max(1, telaoShell ? telaoShell.clientHeight : TELAO_REF_H);
-      const scale = Math.min(shellW * 1.5 / Math.max(1, nw), shellH * 1.5 / Math.max(1, nh));
+      const scale = Math.min(shellW * 1.0 / Math.max(1, nw), shellH * 1.0 / Math.max(1, nh));
       const fw = nw * scale;
       const fh = nh * scale;
       return {
