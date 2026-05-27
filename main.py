@@ -272,6 +272,11 @@ class GaleriaMonitorApp:
             command=self._gerar_videos_mosaico,
         )
         self._btn_gerar_video.pack(side="left")
+        ttk.Button(
+            vid_btn_row,
+            text="Testar outro no browser",
+            command=lambda: self.web_frontend.queue_video("outro"),
+        ).pack(side="left", padx=(8, 0))
 
         ttk.Label(card_video, textvariable=self._video_status_var, style="Hint.TLabel").grid(
             row=3, column=0, sticky="w", pady=(6, 0)

@@ -2912,16 +2912,16 @@ class SimpleMosaicFrontend:
 
         self._video_to_play: str | None = None
         self._video_to_play_until: float = 0.0
-        self._video_intro_ready: bool = False
-        self._video_outro_ready: bool = False
+        self._video_intro_ready: bool = (_PROJECT_DIR / "intro_mosaico.mp4").is_file()
+        self._video_outro_ready: bool = (_PROJECT_DIR / "outro_mosaico.mp4").is_file()
         self._mosaic_was_full: bool = False
         self._video_lock = threading.Lock()
 
     def reset_mosaic_catalog(self) -> None:
         """Zera lista em cache apos limpar a pasta MOSAIC."""
         with self._video_lock:
-            if (_PROJECT_DIR / "intro_mosaico.mp4").is_file():
-                self._video_to_play = "intro"
+            if (_PROJECT_DIR / "outro_mosaico.mp4").is_file():
+                self._video_to_play = "outro"
                 self._video_to_play_until = time.time() + 60.0
             self._mosaic_was_full = False
         with self._catalog_lock:
