@@ -35,7 +35,7 @@ INTRO_FILL_SECS = 9.0
 INTRO_HOLD_SECS = 2.0
 OUTRO_HOLD_SECS = 1.0
 OUTRO_CLEAR_SECS = 7.0
-ANIM_TILE_SECS = 5.5
+ANIM_TILE_SECS = 1.8
 
 
 def _ease_out(t: float) -> float:
@@ -290,7 +290,7 @@ def gerar_intro(
         dist = rng.uniform(min_dist, max_dist)
         start_x.append(cx_vid + math.cos(theta) * dist)
         start_y.append(cy_vid + math.sin(theta) * dist)
-        start_scale.append(rng.uniform(0.4, 9.0))
+        start_scale.append(rng.uniform(0.4, 2.5))
         start_angle.append(rng.uniform(-160, 160))
 
     total_secs = INTRO_FILL_SECS + ANIM_TILE_SECS + INTRO_HOLD_SECS
