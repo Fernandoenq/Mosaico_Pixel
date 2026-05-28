@@ -423,14 +423,14 @@ def gerar_video_completo(
     overlay_path: Path | None = None,
     callback=None,
 ) -> bool:
-    """Gera um único vídeo com intro + outro em sequência sem corte."""
+    """Gera um único vídeo: começa completo, desmonta (outro), monta (intro)."""
     fourcc = cv2.VideoWriter_fourcc(*"mp4v")
     writer = cv2.VideoWriter(str(output_path), fourcc, FPS, (VIDEO_W, VIDEO_H))
     if not writer.isOpened():
         return False
-    ok = gerar_intro(pasta_imagens, output_path, backdrop_path, overlay_path, callback, _writer=writer)
+    ok = gerar_outro(pasta_imagens, output_path, backdrop_path, overlay_path, callback, _writer=writer)
     if ok:
-        ok = gerar_outro(pasta_imagens, output_path, backdrop_path, overlay_path, callback, _writer=writer)
+        ok = gerar_intro(pasta_imagens, output_path, backdrop_path, overlay_path, callback, _writer=writer)
     writer.release()
     return ok
 

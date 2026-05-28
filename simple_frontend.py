@@ -3393,7 +3393,7 @@ class SimpleMosaicFrontend:
                 return
             self._video_generating = True
         try:
-            _video_backdrop = _PROJECT_DIR / "fundo amarelo.png"
+            _video_backdrop = _PROJECT_DIR / "fundo preto.jpg"
             _video_overlay  = _PROJECT_DIR / "essa é a certa.png"
             cmd = [_sys.executable, str(_PROJECT_DIR / "criar_video_mosaico.py"),
                    "--pasta", str(self.mosaic_dir),
