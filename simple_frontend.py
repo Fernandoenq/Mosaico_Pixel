@@ -3386,13 +3386,15 @@ class SimpleMosaicFrontend:
                 return
             self._video_generating = True
         try:
+            _video_backdrop = _PROJECT_DIR / "fundo amarelo.png"
+            _video_overlay  = _PROJECT_DIR / "essa é a certa.png"
             cmd = [_sys.executable, str(_PROJECT_DIR / "criar_video_mosaico.py"),
                    "--pasta", str(self.mosaic_dir),
                    "--out-dir", str(_PROJECT_DIR)]
-            if self.backdrop_path and self.backdrop_path.exists():
-                cmd.extend(["--backdrop", str(self.backdrop_path)])
-            if self.overlay_path and self.overlay_path.exists():
-                cmd.extend(["--overlay", str(self.overlay_path)])
+            if _video_backdrop.exists():
+                cmd.extend(["--backdrop", str(_video_backdrop)])
+            if _video_overlay.exists():
+                cmd.extend(["--overlay", str(_video_overlay)])
             ok = False
             proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
             for line in proc.stdout:
