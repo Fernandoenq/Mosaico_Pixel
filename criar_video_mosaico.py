@@ -19,8 +19,8 @@ import cv2
 import numpy as np
 from PIL import Image
 
-VIDEO_W = 768
-VIDEO_H = 960
+VIDEO_W = 1080
+VIDEO_H = 1920
 FPS = 30
 TILE_SIZE = 38
 COLS = VIDEO_W // TILE_SIZE        # 20  (20 * 38 = 760)

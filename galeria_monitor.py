@@ -12,11 +12,18 @@ import time
 import threading
 import shutil
 import secrets
+import mimetypes
+import os
 from pathlib import Path
+
+import boto3
+from dotenv import load_dotenv
 from PIL import Image, ImageOps
 
 from criar_video_album import gerar_todos_os_videos
 from image_orientation import normalize_for_display
+
+load_dotenv()
 
 
 PASTA_MOSAIC = Path("MOSAIC")
@@ -129,6 +136,44 @@ def _kwargs_save(extensao: str) -> dict:
     return {}
 
 
+def _upload_arquivo_s3(caminho_arquivo: Path, log_callback=None) -> str | None:
+    aws_access_key = os.getenv("AWS_ACCESS_KEY_ID")
+    aws_secret_key = os.getenv("AWS_SECRET_ACCESS_KEY")
+    aws_region = os.getenv("AWS_REGION")
+    bucket_name = os.getenv("S3_BUCKET")
+
+    if not all([aws_access_key, aws_secret_key, aws_region, bucket_name]):
+        if log_callback:
+            log_callback("⚠️ Upload S3 ignorado: variáveis AWS/S3 não configuradas.")
+        return None
+
+    try:
+        s3_client = boto3.client(
+            "s3",
+            aws_access_key_id=aws_access_key,
+            aws_secret_access_key=aws_secret_key,
+            region_name=aws_region,
+        )
+        key = caminho_arquivo.name
+        content_type, _ = mimetypes.guess_type(str(caminho_arquivo))
+        content_type = content_type or "application/octet-stream"
+
+        s3_client.upload_file(
+            Filename=str(caminho_arquivo),
+            Bucket=bucket_name,
+            Key=key,
+            ExtraArgs={"ContentType": content_type},
+        )
+        url = f"https://{bucket_name}.s3.{aws_region}.amazonaws.com/{key}"
+        if log_callback:
+            log_callback(f"☁️ Enviado ao S3: {url}")
+        return url
+    except Exception as exc:
+        if log_callback:
+            log_callback(f"❌ Falha ao enviar ao S3: {caminho_arquivo.name} ({exc})")
+        return None
+
+
 def processar_imagem(
     caminho_imagem: Path,
     pasta_com_moldura: Path,
@@ -184,6 +229,12 @@ def processar_imagem(
     if destino_original is not None:
         log(f"   • Copia em originais: {destino_original}")
     log(f"   • Enviada ao mosaico: {destino_mosaic}")
+
+    _upload_arquivo_s3(destino_sem_moldura, log_callback=log)
+    if destino_com_moldura is not None:
+        _upload_arquivo_s3(destino_com_moldura, log_callback=log)
+    _upload_arquivo_s3(destino_mosaic, log_callback=log)
+
     return destino_mosaic
 
 
