@@ -257,6 +257,7 @@ def gerar_intro(
     backdrop_path: Path | None = None,
     overlay_path: Path | None = None,
     callback=None,
+    _writer=None,
 ) -> bool:
     """Gera o vídeo de entrada (mosaico se montando). Retorna True se gerado com sucesso."""
     # Usa arquivos do projeto como padrão se não fornecidos
@@ -265,7 +266,7 @@ def gerar_intro(
         if _d.is_file():
             backdrop_path = _d
     if overlay_path is None:
-        _o = _PROJECT_DIR / "overlay.png"
+        _o = _PROJECT_DIR / "essa é a certa.png"
         if _o.is_file():
             overlay_path = _o
 
@@ -295,10 +296,13 @@ def gerar_intro(
     total_secs = INTRO_FILL_SECS + ANIM_TILE_SECS + INTRO_HOLD_SECS
     total_frames = int(total_secs * FPS)
 
-    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-    out = cv2.VideoWriter(str(output_path), fourcc, FPS, (VIDEO_W, VIDEO_H))
-    if not out.isOpened():
-        return False
+    own_writer = _writer is None
+    if own_writer:
+        fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+        _writer = cv2.VideoWriter(str(output_path), fourcc, FPS, (VIDEO_W, VIDEO_H))
+        if not _writer.isOpened():
+            return False
+    out = _writer
 
     bg = _load_backdrop(backdrop_path)
 
@@ -337,7 +341,8 @@ def gerar_intro(
         if callback:
             callback(fi, total_frames, "intro")
 
-    out.release()
+    if own_writer:
+        out.release()
     return True
 
 
@@ -347,6 +352,7 @@ def gerar_outro(
     backdrop_path: Path | None = None,
     overlay_path: Path | None = None,
     callback=None,
+    _writer=None,
 ) -> bool:
     """Gera o vídeo de saída (mosaico se desmontando). Retorna True se gerado com sucesso."""
     # Usa arquivos do projeto como padrão se não fornecidos
@@ -355,7 +361,7 @@ def gerar_outro(
         if _d.is_file():
             backdrop_path = _d
     if overlay_path is None:
-        _o = _PROJECT_DIR / "overlay.png"
+        _o = _PROJECT_DIR / "essa é a certa.png"
         if _o.is_file():
             overlay_path = _o
 
@@ -372,13 +378,16 @@ def gerar_outro(
     fly_starts = [_fly_start(tile_dirs[ci], *centers[ci]) for ci in range(TOTAL_CELLS)]
     t0s = [OUTRO_HOLD_SECS + (ci / TOTAL_CELLS) * OUTRO_CLEAR_SECS for ci in range(TOTAL_CELLS)]
 
-    total_secs = OUTRO_HOLD_SECS + OUTRO_CLEAR_SECS
+    total_secs = OUTRO_HOLD_SECS + OUTRO_CLEAR_SECS + ANIM_TILE_SECS
     total_frames = int(total_secs * FPS)
 
-    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-    out = cv2.VideoWriter(str(output_path), fourcc, FPS, (VIDEO_W, VIDEO_H))
-    if not out.isOpened():
-        return False
+    own_writer = _writer is None
+    if own_writer:
+        fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+        _writer = cv2.VideoWriter(str(output_path), fourcc, FPS, (VIDEO_W, VIDEO_H))
+        if not _writer.isOpened():
+            return False
+    out = _writer
 
     bg = _load_backdrop(backdrop_path)
 
@@ -402,8 +411,28 @@ def gerar_outro(
         if callback:
             callback(fi, total_frames, "outro")
 
-    out.release()
+    if own_writer:
+        out.release()
     return True
+
+
+def gerar_video_completo(
+    pasta_imagens: Path,
+    output_path: Path,
+    backdrop_path: Path | None = None,
+    overlay_path: Path | None = None,
+    callback=None,
+) -> bool:
+    """Gera um único vídeo com intro + outro em sequência sem corte."""
+    fourcc = cv2.VideoWriter_fourcc(*"mp4v")
+    writer = cv2.VideoWriter(str(output_path), fourcc, FPS, (VIDEO_W, VIDEO_H))
+    if not writer.isOpened():
+        return False
+    ok = gerar_intro(pasta_imagens, output_path, backdrop_path, overlay_path, callback, _writer=writer)
+    if ok:
+        ok = gerar_outro(pasta_imagens, output_path, backdrop_path, overlay_path, callback, _writer=writer)
+    writer.release()
+    return ok
 
 
 if __name__ == "__main__":
@@ -429,10 +458,6 @@ if __name__ == "__main__":
         if fi % 5 == 0 or fi == ft - 1:
             print(f"PROGRESS:{v}:{fi}:{ft}", flush=True)
 
-    ok = gerar_intro(pasta, out_dir / "intro_mosaico.mp4",
-                     backdrop_path=backdrop, overlay_path=overlay, callback=_cb)
-    print(f"DONE:intro:{'ok' if ok else 'fail'}", flush=True)
-
-    ok = gerar_outro(pasta, out_dir / "outro_mosaico.mp4",
-                     backdrop_path=backdrop, overlay_path=overlay, callback=_cb)
-    print(f"DONE:outro:{'ok' if ok else 'fail'}", flush=True)
+    ok = gerar_video_completo(pasta, out_dir / "mosaico_video.mp4",
+                              backdrop_path=backdrop, overlay_path=overlay, callback=_cb)
+    print(f"DONE:completo:{'ok' if ok else 'fail'}", flush=True)

@@ -775,7 +775,7 @@ HTML_PAGE = """<!doctype html>
     function fitLogoInMosaicArea(nw, nh) {
       const shellW = Math.max(1, telaoShell ? telaoShell.clientWidth : TELAO_REF_W);
       const shellH = Math.max(1, telaoShell ? telaoShell.clientHeight : TELAO_REF_H);
-      const scale = Math.min(shellW * 1.0 / Math.max(1, nw), shellH * 1.0 / Math.max(1, nh));
+      const scale = Math.min(shellW * 1.3 / Math.max(1, nw), shellH * 1.3 / Math.max(1, nh));
       const fw = nw * scale;
       const fh = nh * scale;
       return {
@@ -2636,7 +2636,8 @@ HTML_PAGE = """<!doctype html>
     }
 
     function startMosaicVideo(type) {
-      mosaicVideo.src = '/video/' + type + '_mosaico.mp4?_t=' + Date.now();
+      var filename = type === 'completo' ? 'mosaico_video.mp4' : type + '_mosaico.mp4';
+      mosaicVideo.src = '/video/' + filename + '?_t=' + Date.now();
       mosaicVideo.style.display = 'block';
       mosaicVideo.load();
       mosaicVideo.play().catch(function() {});
@@ -2914,15 +2915,16 @@ class SimpleMosaicFrontend:
         self._video_to_play_until: float = 0.0
         self._video_intro_ready: bool = False
         self._video_outro_ready: bool = False
+        self._video_completo_ready: bool = False
+        self._video_generating: bool = False
         self._mosaic_was_full: bool = False
         self._video_lock = threading.Lock()
 
     def reset_mosaic_catalog(self) -> None:
         """Zera lista em cache apos limpar a pasta MOSAIC."""
         with self._video_lock:
-            if self._video_intro_ready:
-                self._video_to_play = "intro"
-                self._video_to_play_until = time.time() + 60.0
+            self._video_completo_ready = False
+            self._video_to_play = None
             self._mosaic_was_full = False
         with self._catalog_lock:
             self._mosaic_generation = 0
@@ -3017,9 +3019,7 @@ class SimpleMosaicFrontend:
         with self._video_lock:
             if count >= 500 and not self._mosaic_was_full:
                 self._mosaic_was_full = True
-                if self._video_outro_ready:
-                    self._video_to_play = "outro"
-                    self._video_to_play_until = time.time() + 60.0
+                threading.Thread(target=self._generate_and_play_video, daemon=True).start()
             elif count < 500:
                 self._mosaic_was_full = False
 
@@ -3328,10 +3328,11 @@ class SimpleMosaicFrontend:
         self._httpd = None
         self._is_running = False
 
-    def set_videos_ready(self, intro: bool = False, outro: bool = False) -> None:
+    def set_videos_ready(self, intro: bool = False, outro: bool = False, completo: bool = False) -> None:
         with self._video_lock:
             self._video_intro_ready = intro
             self._video_outro_ready = outro
+            self._video_completo_ready = completo
 
     def queue_video(self, which: str) -> None:
         with self._video_lock:
@@ -3351,5 +3352,36 @@ class SimpleMosaicFrontend:
                 "play": play,
                 "ready_intro": self._video_intro_ready,
                 "ready_outro": self._video_outro_ready,
+                "ready_completo": self._video_completo_ready,
             }
+
+    def _generate_and_play_video(self) -> None:
+        """Gera mosaico_video.mp4 em background e dispara reprodução ao concluir."""
+        import subprocess, sys as _sys
+        with self._video_lock:
+            if self._video_generating:
+                return
+            self._video_generating = True
+        try:
+            cmd = [_sys.executable, str(_PROJECT_DIR / "criar_video_mosaico.py"),
+                   "--pasta", str(self.mosaic_dir),
+                   "--out-dir", str(_PROJECT_DIR)]
+            if self.backdrop_path and self.backdrop_path.exists():
+                cmd.extend(["--backdrop", str(self.backdrop_path)])
+            if self.overlay_path and self.overlay_path.exists():
+                cmd.extend(["--overlay", str(self.overlay_path)])
+            ok = False
+            proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            for line in proc.stdout:
+                if line.strip() == "DONE:completo:ok":
+                    ok = True
+            proc.wait()
+            if ok:
+                with self._video_lock:
+                    self._video_completo_ready = True
+                    self._video_to_play = "completo"
+                    self._video_to_play_until = time.time() + 120.0
+        finally:
+            with self._video_lock:
+                self._video_generating = False
 

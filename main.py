@@ -1343,9 +1343,8 @@ class GaleriaMonitorApp:
         def generate():
             import subprocess, sys as _sys
 
-            # Total de frames para calcular progresso (constantes fixas)
-            total_intro = int((9.0 + 2.0) * 30)   # 330
-            total_outro = int((1.0 + 7.0) * 30)   # 240
+            total_intro = 1
+            total_outro = 1
 
             cmd = [_sys.executable, str(_PROJECT_DIR / "criar_video_mosaico.py"),
                    "--pasta",   str(pasta_mosaic),
@@ -1357,6 +1356,7 @@ class GaleriaMonitorApp:
 
             ok_i = False
             ok_o = False
+            ok_c = False
             try:
                 proc = subprocess.Popen(
                     cmd,
@@ -1372,11 +1372,14 @@ class GaleriaMonitorApp:
                         if len(parts) == 4:
                             tipo = parts[1]
                             fi = int(parts[2])
+                            total = int(parts[3])
                             if tipo == "intro":
-                                pct = int(fi / max(1, total_intro) * 100)
+                                total_intro = total
+                                pct = int(fi / max(1, total) * 100)
                                 msg = f"Gerando intro... {pct}%"
                             else:
-                                pct = int(fi / max(1, total_outro) * 100)
+                                total_outro = total
+                                pct = int(fi / max(1, total) * 100)
                                 msg = f"Gerando outro... {pct}%"
                             try:
                                 self.root.after(0, lambda m=msg: self._video_status_var.set(m))
@@ -1386,6 +1389,8 @@ class GaleriaMonitorApp:
                         ok_i = True
                     elif line == "DONE:outro:ok":
                         ok_o = True
+                    elif line == "DONE:completo:ok":
+                        ok_c = True
                     elif line == "ERRO:MOSAIC_VAZIA":
                         break
                 proc.wait()
@@ -1404,14 +1409,13 @@ class GaleriaMonitorApp:
                 return
 
             try:
-                self.web_frontend.set_videos_ready(intro=ok_i, outro=ok_o)
+                self.web_frontend.set_videos_ready(intro=ok_i, outro=ok_o, completo=ok_c)
             except Exception:
                 pass
 
             def finalizar():
                 parts = []
-                parts.append("intro_mosaico.mp4 OK" if ok_i else "intro FALHOU")
-                parts.append("outro_mosaico.mp4 OK" if ok_o else "outro FALHOU")
+                parts.append("mosaico_video.mp4 OK" if ok_c else "video FALHOU")
                 self._video_status_var.set(" | ".join(parts))
                 if self._btn_gerar_video:
                     try:
