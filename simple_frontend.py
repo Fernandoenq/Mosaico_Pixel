@@ -2859,6 +2859,17 @@ class _FrontendHandler(BaseHTTPRequestHandler):
             self._send_json({"ok": True})
             return
 
+        if path == "/api/video/test":
+            video_file = _PROJECT_DIR / "mosaico_video.mp4"
+            if video_file.exists():
+                with self.server_ref._video_lock:
+                    self.server_ref._video_to_play = "completo"
+                    self.server_ref._video_to_play_until = time.time() + 600.0
+                self._send_json({"ok": True, "msg": "video queued"})
+            else:
+                self._send_json({"ok": False, "msg": "mosaico_video.mp4 nao encontrado"})
+            return
+
         if path.startswith("/video/"):
             name = path.removeprefix("/video/").split("?")[0]
             if not name.endswith(".mp4") or "/" in name or ".." in name:
@@ -3392,7 +3403,7 @@ class SimpleMosaicFrontend:
                 with self._video_lock:
                     self._video_completo_ready = True
                     self._video_to_play = "completo"
-                    self._video_to_play_until = time.time() + 120.0
+                    self._video_to_play_until = time.time() + 600.0
         finally:
             with self._video_lock:
                 self._video_generating = False
