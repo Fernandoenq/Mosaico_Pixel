@@ -2628,7 +2628,7 @@ HTML_PAGE = """<!doctype html>
         .then(function(r) { return r.json(); })
         .then(function(data) {
           videoPolling = false;
-          if (data.play && mosaicVideo.style.display !== 'block') {
+          if (data.play && mosaicVideo.style.display === 'none') {
             startMosaicVideo(data.play);
           }
         })
@@ -2636,21 +2636,11 @@ HTML_PAGE = """<!doctype html>
     }
 
     function startMosaicVideo(type) {
-      const url = '/video/' + type + '_mosaico.mp4?_t=' + Date.now();
-      console.log('[video] iniciando', url);
-      mosaicVideo.src = url;
+      mosaicVideo.src = '/video/' + type + '_mosaico.mp4?_t=' + Date.now();
       mosaicVideo.style.display = 'block';
       mosaicVideo.load();
-      mosaicVideo.play().then(function() {
-        console.log('[video] tocando OK');
-      }).catch(function(err) {
-        console.error('[video] erro ao tocar:', err);
-      });
-      mosaicVideo.onerror = function() {
-        console.error('[video] erro de carregamento, src:', mosaicVideo.src);
-      };
+      mosaicVideo.play().catch(function() {});
       mosaicVideo.onended = function() {
-        console.log('[video] terminou');
         mosaicVideo.style.display = 'none';
         mosaicVideo.src = '';
         mosaicVideo.onended = null;
@@ -2660,11 +2650,6 @@ HTML_PAGE = """<!doctype html>
 
     setInterval(pollVideoStatus, 2000);
 
-    /* Botao de teste — clique para tocar o outro imediatamente */
-    document.addEventListener('keydown', function(e) {
-      if (e.key === 'o' || e.key === 'O') startMosaicVideo('outro');
-      if (e.key === 'i' || e.key === 'I') startMosaicVideo('intro');
-    });
     /* Recarregue com Ctrl+F5 apos atualizar o codigo (reload automatico desativado). */
   </script>
 </body>
@@ -2927,16 +2912,16 @@ class SimpleMosaicFrontend:
 
         self._video_to_play: str | None = None
         self._video_to_play_until: float = 0.0
-        self._video_intro_ready: bool = (_PROJECT_DIR / "intro_mosaico.mp4").is_file()
-        self._video_outro_ready: bool = (_PROJECT_DIR / "outro_mosaico.mp4").is_file()
+        self._video_intro_ready: bool = False
+        self._video_outro_ready: bool = False
         self._mosaic_was_full: bool = False
         self._video_lock = threading.Lock()
 
     def reset_mosaic_catalog(self) -> None:
         """Zera lista em cache apos limpar a pasta MOSAIC."""
         with self._video_lock:
-            if (_PROJECT_DIR / "outro_mosaico.mp4").is_file():
-                self._video_to_play = "outro"
+            if self._video_intro_ready:
+                self._video_to_play = "intro"
                 self._video_to_play_until = time.time() + 60.0
             self._mosaic_was_full = False
         with self._catalog_lock:
@@ -3032,7 +3017,7 @@ class SimpleMosaicFrontend:
         with self._video_lock:
             if count >= 500 and not self._mosaic_was_full:
                 self._mosaic_was_full = True
-                if (_PROJECT_DIR / "outro_mosaico.mp4").is_file():
+                if self._video_outro_ready:
                     self._video_to_play = "outro"
                     self._video_to_play_until = time.time() + 60.0
             elif count < 500:
