@@ -2635,18 +2635,25 @@ HTML_PAGE = """<!doctype html>
         .catch(function() { videoPolling = false; });
     }
 
+    function stopMosaicVideo() {
+      mosaicVideo.loop = false;
+      mosaicVideo.pause();
+      mosaicVideo.style.display = 'none';
+      mosaicVideo.style.pointerEvents = 'none';
+      mosaicVideo.src = '';
+      mosaicVideo.onclick = null;
+      fetch('/api/video/clear', { cache: 'no-store' }).catch(function() {});
+    }
+
     function startMosaicVideo(type) {
       var filename = type === 'completo' ? 'mosaico_video.mp4' : type + '_mosaico.mp4';
       mosaicVideo.src = '/video/' + filename + '?_t=' + Date.now();
+      mosaicVideo.loop = true;
       mosaicVideo.style.display = 'block';
+      mosaicVideo.style.pointerEvents = 'auto';
+      mosaicVideo.onclick = stopMosaicVideo;
       mosaicVideo.load();
       mosaicVideo.play().catch(function() {});
-      mosaicVideo.onended = function() {
-        mosaicVideo.style.display = 'none';
-        mosaicVideo.src = '';
-        mosaicVideo.onended = null;
-        fetch('/api/video/clear', { cache: 'no-store' }).catch(function() {});
-      };
     }
 
     setInterval(pollVideoStatus, 2000);
