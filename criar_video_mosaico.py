@@ -13,6 +13,8 @@ import random
 import sys
 from pathlib import Path
 
+import math
+
 import cv2
 import numpy as np
 from PIL import Image
@@ -150,6 +152,58 @@ def _fly_start(direction: str, tx: int, ty: int) -> tuple[float, float]:
     return float(tx), VIDEO_H + TILE_SIZE * 0.5  # bottom
 
 
+def _draw_tile_rotated(
+    frame: np.ndarray,
+    tile: np.ndarray,
+    cx: float,
+    cy: float,
+    scale: float,
+    angle: float,
+    mask: np.ndarray | None = None,
+):
+    """Draws tile at (cx, cy) with scale and rotation angle (degrees)."""
+    if abs(angle) < 0.5:
+        _draw_tile(frame, tile, cx, cy, scale, mask)
+        return
+    if scale < 0.05:
+        return
+    s = max(2, int(TILE_SIZE * scale))
+    try:
+        t = cv2.resize(tile, (s, s), interpolation=cv2.INTER_LINEAR)
+    except Exception:
+        return
+    cos_a = abs(math.cos(math.radians(angle)))
+    sin_a = abs(math.sin(math.radians(angle)))
+    new_w = int(s * cos_a + s * sin_a) + 2
+    new_h = int(s * sin_a + s * cos_a) + 2
+    pad_x = (new_w - s) // 2
+    pad_y = (new_h - s) // 2
+    canvas = np.zeros((new_h, new_w, 3), dtype=np.uint8)
+    canvas[pad_y:pad_y + s, pad_x:pad_x + s] = t
+    alpha_src = np.zeros((new_h, new_w), dtype=np.float32)
+    alpha_src[pad_y:pad_y + s, pad_x:pad_x + s] = 1.0
+    M = cv2.getRotationMatrix2D((new_w / 2, new_h / 2), angle, 1.0)
+    rot_t = cv2.warpAffine(canvas, M, (new_w, new_h), borderMode=cv2.BORDER_CONSTANT, borderValue=(0, 0, 0))
+    rot_alpha = cv2.warpAffine(alpha_src, M, (new_w, new_h), borderMode=cv2.BORDER_CONSTANT, borderValue=0.0)
+    x0 = int(round(cx - new_w / 2))
+    y0 = int(round(cy - new_h / 2))
+    fx0, fy0 = max(0, x0), max(0, y0)
+    fx1, fy1 = min(VIDEO_W, x0 + new_w), min(VIDEO_H, y0 + new_h)
+    if fx0 >= fx1 or fy0 >= fy1:
+        return
+    sx0, sy0 = fx0 - x0, fy0 - y0
+    ph, pw = fy1 - fy0, fx1 - fx0
+    try:
+        a = rot_alpha[sy0:sy0 + ph, sx0:sx0 + pw, np.newaxis]
+        src = rot_t[sy0:sy0 + ph, sx0:sx0 + pw]
+        dst = frame[fy0:fy1, fx0:fx1].astype(np.float32)
+        frame[fy0:fy1, fx0:fx1] = (dst * (1 - a) + src * a).astype(np.uint8)
+        if mask is not None:
+            mask[fy0:fy1, fx0:fx1, 0] = np.maximum(mask[fy0:fy1, fx0:fx1, 0], a[:, :, 0])
+    except Exception:
+        pass
+
+
 def _draw_tile(
     frame: np.ndarray,
     tile: np.ndarray,
@@ -218,12 +272,22 @@ def gerar_intro(
 
     ov_weight = _prep_overlay(overlay_path)
     rng = random.Random(42)
-    dirs = ["left", "right", "top", "bottom"]
-    tile_dirs = [rng.choice(dirs) for _ in range(TOTAL_CELLS)]
 
     centers = [_tile_center(ci) for ci in range(TOTAL_CELLS)]
-    fly_starts = [_fly_start(tile_dirs[ci], *centers[ci]) for ci in range(TOTAL_CELLS)]
     t0s = [(ci / TOTAL_CELLS) * INTRO_FILL_SECS for ci in range(TOTAL_CELLS)]
+
+    # Random start state for each tile: position outside video, scale, rotation
+    min_dist = max(VIDEO_W, VIDEO_H) * 0.8
+    max_dist = max(VIDEO_W, VIDEO_H) * 1.5
+    cx_vid, cy_vid = VIDEO_W / 2, VIDEO_H / 2
+    start_x, start_y, start_scale, start_angle = [], [], [], []
+    for _ in range(TOTAL_CELLS):
+        theta = rng.uniform(0, 2 * math.pi)
+        dist = rng.uniform(min_dist, max_dist)
+        start_x.append(cx_vid + math.cos(theta) * dist)
+        start_y.append(cy_vid + math.sin(theta) * dist)
+        start_scale.append(rng.uniform(0.4, 2.8))
+        start_angle.append(rng.uniform(-160, 160))
 
     total_secs = INTRO_FILL_SECS + INTRO_HOLD_SECS
     total_frames = int(total_secs * FPS)
@@ -253,7 +317,7 @@ def gerar_intro(
             for ci in range(TOTAL_CELLS):
                 t0 = t0s[ci]
                 if t < t0:
-                    break  # tiles are sorted by t0, remaining not started yet
+                    break  # tiles sorted by t0, remaining not started yet
                 tx, ty = centers[ci]
                 t1 = t0 + ANIM_TILE_SECS
                 img = images[ci]
@@ -261,8 +325,11 @@ def gerar_intro(
                     _draw_tile(frame, img, float(tx), float(ty), 1.0, mask=tile_mask)
                 else:
                     ep = _ease_out((t - t0) / ANIM_TILE_SECS)
-                    sx, sy = fly_starts[ci]
-                    _draw_tile(frame, img, sx + (tx - sx) * ep, sy + (ty - sy) * ep, max(0.1, ep), mask=tile_mask)
+                    px = start_x[ci] + (tx - start_x[ci]) * ep
+                    py = start_y[ci] + (ty - start_y[ci]) * ep
+                    sc = start_scale[ci] + (1.0 - start_scale[ci]) * ep
+                    an = start_angle[ci] * (1.0 - ep)
+                    _draw_tile_rotated(frame, img, px, py, max(0.05, sc), an, tile_mask)
             out.write(_apply_overlay(frame, ov_weight, tile_mask))
         if callback:
             callback(fi, total_frames, "intro")
