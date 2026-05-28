@@ -167,6 +167,9 @@ def _draw_tile_rotated(
         return
     if scale < 0.05:
         return
+    half = TILE_SIZE * scale * 0.75
+    if cx + half < 0 or cx - half > VIDEO_W or cy + half < 0 or cy - half > VIDEO_H:
+        return
     s = max(2, int(TILE_SIZE * scale))
     try:
         t = cv2.resize(tile, (s, s), interpolation=cv2.INTER_LINEAR)
