@@ -2898,6 +2898,7 @@ class SimpleMosaicFrontend:
 
         self._httpd: ThreadingHTTPServer | None = None
         self._thread: threading.Thread | None = None
+        self._watcher_thread: threading.Thread | None = None
         self._is_running = False
         self._opened_once = False
         # Incrementado quando chega nova pastilha (injecao/monitor) para o cliente re-pollar.
@@ -3297,6 +3298,15 @@ class SimpleMosaicFrontend:
         self.set_backdrop_path(backdrop_path)
         self.set_overlay_path(overlay_path)
 
+    def _watch_mosaic_loop(self) -> None:
+        import time as _time
+        while self._is_running:
+            try:
+                self.notify_mosaic_changed()
+            except Exception:
+                pass
+            _time.sleep(10)
+
     def start(
         self,
         overlay_path: str | None = None,
@@ -3314,6 +3324,8 @@ class SimpleMosaicFrontend:
             self._thread = threading.Thread(target=self._httpd.serve_forever, daemon=True)
             self._thread.start()
             self._is_running = True
+            self._watcher_thread = threading.Thread(target=self._watch_mosaic_loop, daemon=True)
+            self._watcher_thread.start()
 
         if open_browser and not self._opened_once:
             webbrowser.open(f"http://{self.host}:{self.port}", new=1)
@@ -3323,10 +3335,10 @@ class SimpleMosaicFrontend:
         if not self._is_running:
             return
         assert self._httpd is not None
+        self._is_running = False
         self._httpd.shutdown()
         self._httpd.server_close()
         self._httpd = None
-        self._is_running = False
 
     def set_videos_ready(self, intro: bool = False, outro: bool = False, completo: bool = False) -> None:
         with self._video_lock:
