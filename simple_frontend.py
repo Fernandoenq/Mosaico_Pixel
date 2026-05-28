@@ -2628,7 +2628,7 @@ HTML_PAGE = """<!doctype html>
         .then(function(r) { return r.json(); })
         .then(function(data) {
           videoPolling = false;
-          if (data.play && mosaicVideo.style.display === 'none') {
+          if (data.play && mosaicVideo.style.display !== 'block') {
             startMosaicVideo(data.play);
           }
         })
