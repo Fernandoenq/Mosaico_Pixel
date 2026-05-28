@@ -458,6 +458,20 @@ if __name__ == "__main__":
         if fi % 5 == 0 or fi == ft - 1:
             print(f"PROGRESS:{v}:{fi}:{ft}", flush=True)
 
-    ok = gerar_video_completo(pasta, out_dir / "mosaico_video.mp4",
+    raw_path = out_dir / "mosaico_video_raw.mp4"
+    final_path = out_dir / "mosaico_video.mp4"
+    ok = gerar_video_completo(pasta, raw_path,
                               backdrop_path=backdrop, overlay_path=overlay, callback=_cb)
+    if ok:
+        import subprocess as _sp
+        try:
+            _sp.run(
+                ["ffmpeg", "-y", "-i", str(raw_path),
+                 "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
+                 "-movflags", "+faststart", str(final_path)],
+                check=True, stdout=_sp.DEVNULL, stderr=_sp.DEVNULL,
+            )
+            raw_path.unlink(missing_ok=True)
+        except Exception:
+            raw_path.rename(final_path)
     print(f"DONE:completo:{'ok' if ok else 'fail'}", flush=True)
