@@ -1,0 +1,404 @@
+import { create } from 'zustand';
+import { persist } from 'zustand/middleware';
+import { AUTO_EASE, AnimationPreset } from '../utils/gsapAnimations';
+
+export interface Layer {
+  id: string;
+  name: string;
+  visible: boolean;
+  opacity: number;
+  blur: number;
+  zIndex: number;
+}
+
+export interface PendingPhoto {
+  id: string;
+  url: string;
+  status: string;
+  timestamp?: number;
+}
+
+export interface TilePlacement {
+  photo_id: string;
+  url: string;
+  row: number;
+  col: number;
+  target_x: number;
+  target_y: number;
+  score: number;
+}
+
+export type RunState = 'idle' | 'running' | 'paused';
+
+/**
+ * Campos que compõem a RunConfig — o contrato de configuração entre painel e
+ * telão. Precisa espelhar backend/app/core/run_config.py (mesmos nomes).
+ */
+export const RUN_CONFIG_KEYS = [
+  'screenWidth',
+  'screenHeight',
+  'rows',
+  'cols',
+  'gridOffsetX',
+  'gridOffsetY',
+  'gridWidth',
+  'gridHeight',
+  'gridColor',
+  'gridThickness',
+  'gridOpacity',
+  'gridShape',
+  'gridContainerShape',
+  'animationPreset',
+  'animationDuration',
+  'animationEase',
+  'centralPreviewDuration',
+  'cellFilters',
+  'selectedBrushFilter',
+  'fillSequence',
+  'autoDuplicateToFill',
+  'duplicateDistLimit',
+  'colorStrictness',
+  'hotFolderDir',
+  'targetBaseUrl',
+  'layers',
+] as const;
+
+export type RunConfigKey = (typeof RUN_CONFIG_KEYS)[number];
+
+export interface MosaicStore {
+  // Grid & Display & Telão
+  screenWidth: number;
+  screenHeight: number;
+  rows: number;
+  cols: number;
+  gridOffsetX: number;
+  gridOffsetY: number;
+  gridWidth: number;
+  gridHeight: number;
+  gridColor: string;
+  gridThickness: number;
+  gridOpacity: number;
+  gridShape: 'square' | 'diamond' | 'hexagon' | 'circle';
+  gridContainerShape: 'rectangle' | 'diamond_mask' | 'hexagon_mask' | 'circle_mask' | 'hexagon_halftone' | 'auto_color_mask';
+
+  // Configurações de Animação & Preview Central
+  animationPreset: AnimationPreset;
+  animationDuration: number;
+  animationEase: string;
+  centralPreviewDuration: number;
+
+  // Editor de Filtros & Pintura de Áreas na Grade
+  cellFilters: Record<string, string>; // key: "r_c" -> filterId ('red' | 'gold' | 'cyan' | 'grayscale' | 'sepia' | 'green' | 'none')
+  brushModeActive: boolean;
+  selectedBrushFilter: string;
+
+  // Ordem de Preenchimento & Auto-Duplicação
+  fillSequence: 'color_match' | 'top_to_bottom' | 'bottom_to_top' | 'center_out' | 'random';
+  autoDuplicateToFill: boolean;
+
+  duplicateDistLimit: number;
+  colorStrictness: number;
+  hotFolderDir: string;
+  targetBaseUrl: string | null;
+  
+  // State Arrays
+  pendingPhotos: PendingPhoto[];
+  approvedPhotos: PendingPhoto[];
+  placedTiles: Record<string, TilePlacement>; // key: "r_c"
+  lockedTiles: Set<string>; // "r_c"
+  layers: Layer[];
+
+  // Selection & Interactivity
+  selectedTile: { row: number; col: number } | null;
+  contextMenu: { x: number; y: number; row: number; col: number } | null;
+  swapModalCell: { row: number; col: number } | null;
+
+  // Transporte & sincronização com o backend
+  runState: RunState;
+  displayMode: boolean;
+  lastAppliedConfig: string | null;
+  socketConnected: boolean;
+
+  // Actions
+  setSocketConnected: (socketConnected: boolean) => void;
+  setRunState: (runState: RunState) => void;
+  setDisplayMode: (displayMode: boolean) => void;
+  applyServerConfig: (config: Record<string, unknown>) => void;
+  markConfigApplied: () => void;
+  clearMosaic: () => void;
+  setTargetBaseUrl: (url: string | null) => void;
+  setScreenSize: (width: number, height: number) => void;
+  setGridSettings: (rows: number, cols: number, distLimit: number, strictness: number) => void;
+  setGridBounds: (offsetX: number, offsetY: number, width: number, height: number) => void;
+  setGridStyle: (color: string, thickness: number, opacity: number) => void;
+  setGridShape: (shape: 'square' | 'diamond' | 'hexagon' | 'circle') => void;
+  setGridContainerShape: (shape: 'rectangle' | 'diamond_mask' | 'hexagon_mask' | 'circle_mask' | 'hexagon_halftone' | 'auto_color_mask') => void;
+  setAnimationConfig: (preset: AnimationPreset, duration: number, ease: string) => void;
+  setCentralPreviewDuration: (duration: number) => void;
+  setBrushModeActive: (active: boolean) => void;
+  setSelectedBrushFilter: (filterId: string) => void;
+  setFillSequence: (seq: 'color_match' | 'top_to_bottom' | 'bottom_to_top' | 'center_out' | 'random') => void;
+  setAutoDuplicateToFill: (enabled: boolean) => void;
+  paintCell: (row: number, col: number, filterId?: string) => void;
+  clearCellFilters: () => void;
+  setLayers: (layers: Layer[]) => void;
+  updateLayer: (id: string, changes: Partial<Layer>) => void;
+  addPendingPhoto: (photo: PendingPhoto) => void;
+  removePendingPhoto: (id: string) => void;
+  placeTile: (tile: TilePlacement) => void;
+  lockTile: (row: number, col: number) => void;
+  unlockTile: (row: number, col: number) => void;
+  deleteTile: (row: number, col: number) => void;
+  setContextMenu: (menu: { x: number; y: number; row: number; col: number } | null) => void;
+  setSwapModalCell: (cell: { row: number; col: number } | null) => void;
+}
+
+export type RunConfig = Pick<MosaicStore, RunConfigKey>;
+
+/** Extrai do store apenas o que é publicado para o telão. */
+export const pickRunConfig = (state: MosaicStore): RunConfig =>
+  RUN_CONFIG_KEYS.reduce((acc, key) => {
+    (acc as Record<string, unknown>)[key] = state[key];
+    return acc;
+  }, {} as RunConfig);
+
+/**
+ * Assinatura estável da config, usada para saber se há alterações pendentes de
+ * aplicar. cellFilters é ordenado porque a ordem de pintura não muda o conteúdo.
+ */
+export const configSignature = (state: MosaicStore): string => {
+  const config = pickRunConfig(state);
+  const cellFilters = Object.keys(config.cellFilters)
+    .sort()
+    .reduce<Record<string, string>>((acc, key) => {
+      acc[key] = config.cellFilters[key];
+      return acc;
+    }, {});
+  return JSON.stringify({ ...config, cellFilters });
+};
+
+/** Mantém só as chaves conhecidas de um payload vindo do servidor. */
+const sanitizeIncomingConfig = (config: Record<string, unknown>): Partial<RunConfig> => {
+  const clean: Record<string, unknown> = {};
+  RUN_CONFIG_KEYS.forEach((key) => {
+    const value = config[key];
+    if (value === undefined) return;
+    if (value === null && key !== 'targetBaseUrl') return;
+    clean[key] = value;
+  });
+  return clean as Partial<RunConfig>;
+};
+
+export const useMosaicStore = create<MosaicStore>()(
+  persist(
+    (set) => ({
+      screenWidth: 1920,
+      screenHeight: 1080,
+      rows: 30,
+      cols: 40,
+      gridOffsetX: 0,
+      gridOffsetY: 0,
+      gridWidth: 1920,
+      gridHeight: 1080,
+      gridColor: "#00ffff",
+      gridThickness: 2,
+      gridOpacity: 0.6,
+      gridShape: "diamond",
+      gridContainerShape: "diamond_mask",
+
+      animationPreset: "hsbc_cascade",
+      animationDuration: 0.8,
+      animationEase: AUTO_EASE,
+      centralPreviewDuration: 0.8,
+
+      cellFilters: {},
+      brushModeActive: false,
+      selectedBrushFilter: "red",
+
+      fillSequence: "color_match",
+      autoDuplicateToFill: false,
+
+      duplicateDistLimit: 3,
+      colorStrictness: 1.0,
+      hotFolderDir: "storage/hot_folder",
+      targetBaseUrl: null,
+
+      pendingPhotos: [],
+      approvedPhotos: [],
+      placedTiles: {},
+      lockedTiles: new Set(),
+      layers: [
+        { id: "base", name: "Camada 0: Imagem Base", visible: true, opacity: 1.0, blur: 0, zIndex: 0 },
+        { id: "landed", name: "Camada 1: Fotos Pousadas", visible: true, opacity: 1.0, blur: 0, zIndex: 1 },
+        { id: "flying", name: "Camada 2: Foto Voadora Preview", visible: true, opacity: 1.0, blur: 0, zIndex: 2 },
+        { id: "grid", name: "Camada 3: Linhas de Grade", visible: true, opacity: 0.6, blur: 0, zIndex: 3 },
+        { id: "logo", name: "Camada 4: Logo Overlay", visible: true, opacity: 0.8, blur: 0, zIndex: 4 },
+        { id: "text", name: "Camada 5: Texto Overlay", visible: true, opacity: 1.0, blur: 0, zIndex: 5 },
+      ],
+
+      selectedTile: null,
+      contextMenu: null,
+      swapModalCell: null,
+
+      runState: 'idle',
+      displayMode: false,
+      lastAppliedConfig: null,
+      socketConnected: false,
+
+      setSocketConnected: (socketConnected) => set({ socketConnected }),
+      setRunState: (runState) => set({ runState }),
+      setDisplayMode: (displayMode) => set({ displayMode }),
+
+      applyServerConfig: (config) =>
+        set((state) => {
+          const incoming = sanitizeIncomingConfig(config);
+          const merged = { ...state, ...incoming } as MosaicStore;
+          return { ...incoming, lastAppliedConfig: configSignature(merged) };
+        }),
+
+      markConfigApplied: () => set((state) => ({ lastAppliedConfig: configSignature(state) })),
+
+      clearMosaic: () =>
+        set({ placedTiles: {}, lockedTiles: new Set(), pendingPhotos: [], approvedPhotos: [] }),
+
+      setTargetBaseUrl: (targetBaseUrl) => set({ targetBaseUrl }),
+      // Reescala o enquadramento da grade junto com o palco. Zerar para tela
+      // cheia descartaria o posicionamento que o operador ajustou à mão.
+      setScreenSize: (screenWidth, screenHeight) =>
+        set((state) => {
+          const scaleX = state.screenWidth > 0 ? screenWidth / state.screenWidth : 1;
+          const scaleY = state.screenHeight > 0 ? screenHeight / state.screenHeight : 1;
+          return {
+            screenWidth,
+            screenHeight,
+            gridOffsetX: Math.round(state.gridOffsetX * scaleX),
+            gridOffsetY: Math.round(state.gridOffsetY * scaleY),
+            gridWidth: Math.round((state.gridWidth || state.screenWidth) * scaleX),
+            gridHeight: Math.round((state.gridHeight || state.screenHeight) * scaleY),
+          };
+        }),
+
+      setGridSettings: (rows, cols, duplicateDistLimit, colorStrictness) =>
+        set({ rows, cols, duplicateDistLimit, colorStrictness }),
+
+      setGridBounds: (gridOffsetX, gridOffsetY, gridWidth, gridHeight) =>
+        set({ gridOffsetX, gridOffsetY, gridWidth, gridHeight }),
+
+      setGridStyle: (gridColor, gridThickness, gridOpacity) =>
+        set({ gridColor, gridThickness, gridOpacity }),
+
+      setGridShape: (gridShape) => set({ gridShape }),
+      setGridContainerShape: (gridContainerShape) => set({ gridContainerShape }),
+      setAnimationConfig: (animationPreset, animationDuration, animationEase) => set({ animationPreset, animationDuration, animationEase }),
+      setCentralPreviewDuration: (centralPreviewDuration) => set({ centralPreviewDuration }),
+
+      setBrushModeActive: (brushModeActive) => set({ brushModeActive }),
+      setSelectedBrushFilter: (selectedBrushFilter) => set({ selectedBrushFilter }),
+      setFillSequence: (fillSequence) => set({ fillSequence }),
+      setAutoDuplicateToFill: (autoDuplicateToFill) => set({ autoDuplicateToFill }),
+
+      paintCell: (row, col, filterId) =>
+        set((state) => {
+          const key = `${row}_${col}`;
+          const targetFilter = filterId || state.selectedBrushFilter;
+          if (targetFilter === 'none' || targetFilter === 'clear') {
+            const updated = { ...state.cellFilters };
+            delete updated[key];
+            return { cellFilters: updated };
+          }
+          return {
+            cellFilters: {
+              ...state.cellFilters,
+              [key]: targetFilter,
+            },
+          };
+        }),
+
+      clearCellFilters: () => set({ cellFilters: {} }),
+
+      setLayers: (layers) => set({ layers }),
+
+      updateLayer: (id, changes) =>
+        set((state) => ({
+          layers: state.layers.map((l) => (l.id === id ? { ...l, ...changes } : l)),
+        })),
+
+      addPendingPhoto: (photo) =>
+        set((state) => ({
+          pendingPhotos: [photo, ...state.pendingPhotos],
+        })),
+
+      removePendingPhoto: (id) =>
+        set((state) => ({
+          pendingPhotos: state.pendingPhotos.filter((p) => p.id !== id),
+        })),
+
+      placeTile: (tile) =>
+        set((state) => ({
+          placedTiles: {
+            ...state.placedTiles,
+            [`${tile.row}_${tile.col}`]: tile,
+          },
+        })),
+
+      lockTile: (row, col) =>
+        set((state) => {
+          const newLocked = new Set(state.lockedTiles);
+          newLocked.add(`${row}_${col}`);
+          return { lockedTiles: newLocked };
+        }),
+
+      unlockTile: (row, col) =>
+        set((state) => {
+          const newLocked = new Set(state.lockedTiles);
+          newLocked.delete(`${row}_${col}`);
+          return { lockedTiles: newLocked };
+        }),
+
+      deleteTile: (row, col) =>
+        set((state) => {
+          const key = `${row}_${col}`;
+          const newTiles = { ...state.placedTiles };
+          delete newTiles[key];
+          const newLocked = new Set(state.lockedTiles);
+          newLocked.delete(key);
+          return { placedTiles: newTiles, lockedTiles: newLocked };
+        }),
+
+      setContextMenu: (contextMenu) => set({ contextMenu }),
+      setSwapModalCell: (swapModalCell) => set({ swapModalCell }),
+    }),
+    {
+      name: 'mosaic-studio-config-storage',
+      partialize: (state) => ({
+        screenWidth: state.screenWidth,
+        screenHeight: state.screenHeight,
+        rows: state.rows,
+        cols: state.cols,
+        gridOffsetX: state.gridOffsetX,
+        gridOffsetY: state.gridOffsetY,
+        gridWidth: state.gridWidth,
+        gridHeight: state.gridHeight,
+        gridColor: state.gridColor,
+        gridThickness: state.gridThickness,
+        gridOpacity: state.gridOpacity,
+        gridShape: state.gridShape,
+        gridContainerShape: state.gridContainerShape,
+        animationPreset: state.animationPreset,
+        animationDuration: state.animationDuration,
+        animationEase: state.animationEase,
+        centralPreviewDuration: state.centralPreviewDuration,
+        cellFilters: state.cellFilters,
+        selectedBrushFilter: state.selectedBrushFilter,
+        fillSequence: state.fillSequence,
+        autoDuplicateToFill: state.autoDuplicateToFill,
+        duplicateDistLimit: state.duplicateDistLimit,
+        colorStrictness: state.colorStrictness,
+        targetBaseUrl: state.targetBaseUrl,
+        hotFolderDir: state.hotFolderDir,
+        layers: state.layers,
+        lastAppliedConfig: state.lastAppliedConfig,
+      }),
+    }
+  )
+);

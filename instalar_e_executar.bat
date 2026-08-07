@@ -29,7 +29,7 @@ echo.
 
 echo [3/3] Iniciando sistema (monitoramento + mosaico)...
 echo.
-python main.py
+python src/main.py
 if errorlevel 1 (
     echo.
     echo ❌ Erro ao iniciar sistema!
