@@ -11,7 +11,7 @@
   "gridThickness": 6,
   "gridOpacity": 0.0,
   "gridShape": "square",
-  "gridContainerShape": "rectangle",
+  "gridContainerShape": "custom_mask",
   "animationPreset": "wave",
   "animationDuration": 0.8,
   "animationEase": "auto",
