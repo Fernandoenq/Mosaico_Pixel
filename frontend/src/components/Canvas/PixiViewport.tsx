@@ -358,6 +358,16 @@ export const PixiViewport: React.FC = () => {
               /* pousar é best-effort; a fila não pode parar por causa disso */
             }
           }
+
+          // Respiro entre um preview e o próximo. Numa rajada — a duplicação
+          // gradual, ou várias pessoas fotografando junto — as fotos entravam
+          // coladas e ninguém acompanhava quem tinha acabado de aparecer.
+          const respiro = useMosaicStore.getState().previewGapSeconds;
+          if (respiro > 0 && animationQueue.current.length > 0 && !unmounted) {
+            await new Promise<void>((resolve) => {
+              window.setTimeout(resolve, respiro * 1000);
+            });
+          }
         }
       } finally {
         isAnimating.current = false;

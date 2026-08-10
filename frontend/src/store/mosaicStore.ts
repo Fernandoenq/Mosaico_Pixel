@@ -54,6 +54,7 @@ export const RUN_CONFIG_KEYS = [
   'centralPreviewEnabled',
   'centralPreviewDuration',
   'previewCardScale',
+  'previewGapSeconds',
   'idleReplayEnabled',
   'idleReplayDelay',
   'idleReplayInterval',
@@ -99,6 +100,8 @@ export interface MosaicStore {
   centralPreviewDuration: number;
   /** Lado do cartao de preview como fracao da altura do telao. */
   previewCardScale: number;
+  /** Respiro entre um preview e o proximo, em segundos. */
+  previewGapSeconds: number;
   /** Sem foto nova, o telao volta a destacar fotos ja pousadas. */
   idleReplayEnabled: boolean;
   /** Segundos sem foto nova ate o modo ocioso comecar. */
@@ -162,6 +165,7 @@ export interface MosaicStore {
   setCentralPreviewDuration: (duration: number) => void;
   setCentralPreviewEnabled: (enabled: boolean) => void;
   setPreviewCardScale: (scale: number) => void;
+  setPreviewGapSeconds: (segundos: number) => void;
   setIdleReplay: (enabled: boolean, delay: number, interval: number) => void;
   setBrushModeActive: (active: boolean) => void;
   setSelectedBrushFilter: (filterId: string) => void;
@@ -242,6 +246,7 @@ export const useMosaicStore = create<MosaicStore>()(
       centralPreviewEnabled: true,
       centralPreviewDuration: 10.0,
       previewCardScale: 1.0,
+      previewGapSeconds: 1.5,
       idleReplayEnabled: true,
       idleReplayDelay: 20,
       idleReplayInterval: 5,
@@ -333,6 +338,7 @@ export const useMosaicStore = create<MosaicStore>()(
       setCentralPreviewDuration: (centralPreviewDuration) => set({ centralPreviewDuration }),
       setCentralPreviewEnabled: (centralPreviewEnabled) => set({ centralPreviewEnabled }),
       setPreviewCardScale: (previewCardScale) => set({ previewCardScale }),
+      setPreviewGapSeconds: (previewGapSeconds) => set({ previewGapSeconds }),
       setIdleReplay: (idleReplayEnabled, idleReplayDelay, idleReplayInterval) =>
         set({ idleReplayEnabled, idleReplayDelay, idleReplayInterval }),
 
@@ -438,6 +444,7 @@ export const useMosaicStore = create<MosaicStore>()(
         centralPreviewEnabled: state.centralPreviewEnabled,
         centralPreviewDuration: state.centralPreviewDuration,
         previewCardScale: state.previewCardScale,
+        previewGapSeconds: state.previewGapSeconds,
         idleReplayEnabled: state.idleReplayEnabled,
         idleReplayDelay: state.idleReplayDelay,
         idleReplayInterval: state.idleReplayInterval,

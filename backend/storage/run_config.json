@@ -18,6 +18,7 @@
   "centralPreviewEnabled": true,
   "centralPreviewDuration": 10.0,
   "previewCardScale": 1.0,
+  "previewGapSeconds": 1.5,
   "idleReplayEnabled": true,
   "idleReplayDelay": 20.0,
   "idleReplayInterval": 5.0,

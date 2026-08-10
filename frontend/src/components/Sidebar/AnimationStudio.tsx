@@ -67,6 +67,7 @@ export const AnimationStudio: React.FC = () => {
     centralPreviewEnabled,
     centralPreviewDuration,
     previewCardScale,
+    previewGapSeconds,
     screenHeight,
     gridShape,
     idleReplayEnabled,
@@ -76,6 +77,7 @@ export const AnimationStudio: React.FC = () => {
     setCentralPreviewDuration,
     setCentralPreviewEnabled,
     setPreviewCardScale,
+    setPreviewGapSeconds,
     setIdleReplay,
   } = useMosaicStore();
 
@@ -256,6 +258,27 @@ export const AnimationStudio: React.FC = () => {
           />
           <span className="text-[10px] text-slate-500">
             Fração da altura do telão. Acima de 90% o cartão encosta nas bordas.
+          </span>
+        </div>
+
+        {/* Vale mesmo com o preview desligado: é o ritmo da fila, não do cartão. */}
+        <div className="flex flex-col gap-1">
+          <div className="flex justify-between text-xs text-slate-400">
+            <span>Respiro entre Previews</span>
+            <span className="font-mono text-cyan-300">{previewGapSeconds.toFixed(1)}s</span>
+          </div>
+          <input
+            type="range"
+            min="0"
+            max="15"
+            step="0.5"
+            value={previewGapSeconds}
+            onChange={(e) => setPreviewGapSeconds(parseFloat(e.target.value))}
+            className="w-full h-1.5 bg-slate-700 rounded appearance-none cursor-pointer accent-cyan-400"
+          />
+          <span className="text-[10px] text-slate-500">
+            Pausa entre uma foto e a seguinte. Em rajada — duplicação ligada ou
+            várias pessoas fotografando junto — sem isso elas entram coladas.
           </span>
         </div>
 
