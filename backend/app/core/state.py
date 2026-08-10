@@ -41,6 +41,11 @@ class MosaicState:
             custom_mask_cells=self.custom_mask_cells,
         )
         self.queue_manager = QueueManager()
+        # URL de cada ladrilho pousado, por photo_id. O preenchimento por
+        # duplicatas pode usar arquivos de `storage/tiles` que nunca passaram
+        # pela fila de moderação: sem este registro, `placed_tiles_payload` não
+        # acha a URL e um telão que reconecta recebe o mosaico VAZIO.
+        self.tile_urls: dict[str, str] = {}
 
     # --- Views sobre a config (compatibilidade com o código existente) ---
 
@@ -184,8 +189,14 @@ class MosaicState:
         """Zera o mosaico para o próximo evento. Não mexe na configuração."""
         self.engine.placed_tiles.clear()
         self.engine.locked_tiles.clear()
+        self.tile_urls.clear()
         self.queue_manager = QueueManager()
         self.set_run_state("idle")
+
+    def register_tile_url(self, photo_id: str, url: str):
+        """Guarda a URL usada no TILE_PLACED para reconstruir o estado depois."""
+        if photo_id and url:
+            self.tile_urls[photo_id] = url
 
     def placed_tiles_payload(self) -> list[dict]:
         """
@@ -199,7 +210,11 @@ class MosaicState:
 
         payload = []
         for (row, col), photo_id in self.engine.placed_tiles.items():
-            url = url_by_id.get(photo_id) or url_by_id.get(photo_id.split("_dup_")[0])
+            url = (
+                self.tile_urls.get(photo_id)
+                or url_by_id.get(photo_id)
+                or url_by_id.get(photo_id.split("_dup_")[0])
+            )
             if not url:
                 continue
             payload.append(

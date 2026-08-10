@@ -112,6 +112,7 @@ def _ingest_image(img_bgr, photo_id: str, content_hash: str, origem: str):
             print(f"[{origem}] Sem célula livre para {photo_id}")
             return
 
+        state.register_tile_url(photo_id, url)
         _emit_from_thread("TILE_PLACED", {
             "photo_id": photo_id,
             "url": url,
@@ -330,6 +331,7 @@ async def run_transport(action: str):
                             "target_y": target_cell[0] * state.engine.tile_h,
                             "score": best_score,
                         }
+                        state.register_tile_url(item["id"], item["url"])
                         await broadcast_event("TILE_PLACED", payload)
                         await asyncio.sleep(0.15)  # Dá respiro pro event loop e cria efeito cascata visual
     elif action == "pause":
@@ -648,6 +650,10 @@ async def approve_photo(
                 fill_sequence=fill_sequence
             )
             
+            if r is None:
+                print(f"[Approve] Sem célula dentro do contorno para {photo_id}")
+                return
+
             placement = {
                 "photo_id": photo_id,
                 "url": item["url"],
@@ -658,6 +664,7 @@ async def approve_photo(
                 "score": score
             }
             print(f"[Approve] TILE_PLACED: photo={photo_id} -> row={r}, col={c}, score={score:.2f}")
+            state.register_tile_url(photo_id, item["url"])
             
             # Usa run_coroutine_threadsafe para enviar ao loop principal do asyncio
             future = asyncio.run_coroutine_threadsafe(
@@ -765,6 +772,7 @@ async def auto_fill_duplicates(fill_sequence: str | None = None):
             # Sem célula dentro do contorno — não há o que preencher.
             break
 
+        state.register_tile_url(photo_id, item["url"])
         await broadcast_event("TILE_PLACED", {
             "photo_id": photo_id,
             "url": item["url"],
