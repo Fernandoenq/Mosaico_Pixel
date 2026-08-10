@@ -963,16 +963,23 @@ async def remove_duplicates():
     }
 
 @app.post("/api/mosaic/outro")
-async def play_mosaic_outro():
+async def play_mosaic_outro(modo: str = "retorno"):
     """
-    Encerramento do evento: dispersa o mosaico para fora da tela.
+    Encerramento do evento: desfaz o mosaico na tela.
+
+    `retorno` (padrão) é a animação de entrada ao contrário — cada foto refaz o
+    voo até o centro, cresce até o tamanho do cartão de preview e some.
+    `dispersar` é a saída antiga, com os ladrilhos jogados para fora da tela.
 
     Limpa os ladrilhos no servidor junto com a animação para que o estado bata
     com o que ficou na tela — um telão que reconecte depois não ressuscita o
-    mosaico dispersado. A fila e as fotos aprovadas são preservadas.
+    mosaico já encerrado. A fila e as fotos aprovadas são preservadas.
     """
+    if modo not in ("retorno", "dispersar"):
+        raise HTTPException(status_code=400, detail=f"Modo de saída inválido: {modo}")
+
     tile_count = len(state.engine.placed_tiles)
-    await broadcast_event("MOSAIC_OUTRO", {"tile_count": tile_count})
+    await broadcast_event("MOSAIC_OUTRO", {"tile_count": tile_count, "modo": modo})
     state.engine.placed_tiles.clear()
     state.engine.locked_tiles.clear()
     return {"status": "success", "dispersed_tiles": tile_count}

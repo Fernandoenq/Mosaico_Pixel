@@ -333,12 +333,18 @@ export const animateTileFlight = ({
   return tl;
 };
 
+/** `dispersar`: para fora da tela. `retorno`: de volta ao centro, o caminho da entrada ao contrário. */
+export type OutroModo = 'dispersar' | 'retorno';
+
 export interface MosaicOutroParams {
   landedContainer: PIXI.Container;
   screenWidth: number;
   screenHeight: number;
   duration?: number;
   ease?: string;
+  modo?: OutroModo;
+  /** Lado do cartão central, para o retorno terminar do mesmo tamanho da entrada. */
+  cardSize?: number;
   onComplete?: () => void;
 }
 
@@ -355,6 +361,8 @@ export const animateMosaicOutro = ({
   screenHeight,
   duration = 1.4,
   ease = 'power3.in',
+  modo = 'dispersar',
+  cardSize = 600,
   onComplete,
 }: MosaicOutroParams) => {
   const tiles = [...landedContainer.children] as PIXI.Container[];
@@ -367,6 +375,55 @@ export const animateMosaicOutro = ({
   const centerY = screenHeight / 2;
   const flightDistance = Math.hypot(screenWidth, screenHeight);
   let remaining = tiles.length;
+
+  const terminar = () => {
+    remaining -= 1;
+    if (remaining === 0) {
+      landedContainer.removeChildren();
+      onComplete?.();
+    }
+  };
+
+  if (modo === 'retorno') {
+    // Saída = entrada ao contrário. Cada ladrilho refaz o voo de volta ao
+    // centro, cresce até o tamanho do cartão de preview e só então some. O
+    // mosaico se desfaz pelo mesmo caminho por onde se formou.
+    const distanciaMaxima = Math.max(
+      1,
+      ...tiles.map((t) => Math.hypot(t.x + (t.width || 1) / 2 - centerX, t.y + (t.height || 1) / 2 - centerY)),
+    );
+
+    tiles.forEach((tile) => {
+      const limites = tile.getLocalBounds();
+      const largura = limites.width || 1;
+      const altura = limites.height || 1;
+
+      // Sem pivô no centro, o ladrilho cresce para a direita e para baixo e o
+      // voo chega torto no meio da tela.
+      tile.pivot.set(limites.x + largura / 2, limites.y + altura / 2);
+      tile.x += largura / 2;
+      tile.y += altura / 2;
+
+      const distancia = Math.hypot(tile.x - centerX, tile.y - centerY);
+      // Os de fora saem primeiro: o mosaico se recolhe de fora para dentro.
+      const atraso = (1 - distancia / distanciaMaxima) * 0.5;
+      const alvo = Math.max(1, cardSize / largura);
+
+      // A escala é o ObservablePoint, campos x/y — nunca a propriedade `scale`
+      // do Container. Sem o PixiPlugin o GSAP troca o ponto por um número, o
+      // PIXI faz copyFrom(n), lê (n).x — undefined — e o ladrilho some do nada.
+      gsap.to(tile, { duration, delay: atraso, x: centerX, y: centerY, ease });
+      gsap.to(tile.scale, { duration, delay: atraso, x: alvo, y: alvo, ease });
+      gsap.to(tile, {
+        duration: duration * 0.35,
+        delay: atraso + duration * 0.65,
+        alpha: 0,
+        ease: 'power2.in',
+        onComplete: terminar,
+      });
+    });
+    return;
+  }
 
   tiles.forEach((tile, index) => {
     const dx = tile.x + (tile.width || 1) / 2 - centerX;
@@ -383,13 +440,7 @@ export const animateMosaicOutro = ({
       rotation: ((index % 7) - 3) * 0.4,
       alpha: 0,
       ease,
-      onComplete: () => {
-        remaining -= 1;
-        if (remaining === 0) {
-          landedContainer.removeChildren();
-          onComplete?.();
-        }
-      },
+      onComplete: terminar,
     });
   });
 };

@@ -1237,7 +1237,7 @@
   "hotFolderDir": "storage/hot_folder",
   "targetBaseUrl": "/storage/target_base.jpg?t=778466",
   "foregroundUrl": "/storage/foreground.png?t=10a6d57b",
-  "photosAboveBrand": true,
+  "photosAboveBrand": false,
   "autoPlaceMode": true,
   "layers": [
     {

@@ -482,6 +482,10 @@ export const PixiViewport: React.FC = () => {
               screenWidth: store.screenWidth,
               screenHeight: store.screenHeight,
               duration: store.animationDuration * 1.6,
+              modo: data.payload?.modo === 'dispersar' ? 'dispersar' : 'retorno',
+              // Mesmo tamanho da entrada: o ladrilho volta a ser o cartão que
+              // a pessoa viu quando a foto dela chegou.
+              cardSize: previewCardSize(store.screenHeight, store.previewCardScale),
               onComplete: () => clearMosaic(),
             });
           } else {

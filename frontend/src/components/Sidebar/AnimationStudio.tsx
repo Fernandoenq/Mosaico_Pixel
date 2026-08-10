@@ -89,16 +89,19 @@ export const AnimationStudio: React.FC = () => {
     setReplayKey((k) => k + 1);
   };
 
-  const handleOutro = async () => {
-    const confirmed = window.confirm(
-      'Dispersar o mosaico no telão?\n\nOs ladrilhos voam para fora da tela e a grade fica vazia. As fotos aprovadas são preservadas.'
-    );
-    if (!confirmed) return;
+  const handleOutro = async (modo: 'retorno' | 'dispersar') => {
+    const descricao =
+      modo === 'retorno'
+        ? 'As fotos refazem o voo até o centro, crescem e somem — a entrada ao contrário.'
+        : 'Os ladrilhos voam para fora da tela, do centro para as bordas.';
+    if (!window.confirm(`Encerrar o mosaico no telão?\n\n${descricao}\n\nA grade fica vazia; as fotos aprovadas são preservadas.`)) {
+      return;
+    }
     setDispersing(true);
     try {
-      await playMosaicOutro();
+      await playMosaicOutro(modo);
     } catch (err) {
-      console.error('[Outro] Falha ao dispersar:', err);
+      console.error('[Outro] Falha ao encerrar:', err);
     } finally {
       setDispersing(false);
     }
@@ -364,17 +367,29 @@ export const AnimationStudio: React.FC = () => {
         </div>
 
         <p className="text-[10px] text-slate-400 leading-snug">
-          Dispersa todos os ladrilhos para fora da tela, do centro para as bordas. Use no fim do evento — não é
-          um preset de entrada.
+          Duas saídas para o fim do evento — nenhuma é preset de entrada.
+          <strong className="text-slate-300"> Recolher</strong> é a animação de
+          chegada ao contrário: cada foto refaz o voo até o centro, cresce até o
+          tamanho do cartão e some.{' '}
+          <strong className="text-slate-300">Dispersar</strong> joga os ladrilhos
+          para fora da tela.
         </p>
 
         <button
-          onClick={handleOutro}
+          onClick={() => handleOutro('retorno')}
           disabled={dispersing}
           className="w-full bg-gradient-to-r from-rose-700 to-orange-700 hover:from-rose-600 hover:to-orange-600 disabled:opacity-50 text-white font-bold text-xs py-2 rounded-lg transition shadow-md flex items-center justify-center gap-1.5 border border-rose-500/40 active:scale-95"
         >
           <Bomb className="w-4 h-4" />
-          {dispersing ? 'Dispersando...' : '💥 Dispersar Mosaico'}
+          {dispersing ? 'Encerrando...' : '🌀 Recolher para o Centro'}
+        </button>
+
+        <button
+          onClick={() => handleOutro('dispersar')}
+          disabled={dispersing}
+          className="w-full bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-slate-300 font-semibold text-[11px] py-1.5 rounded-lg transition border border-slate-600 active:scale-95"
+        >
+          💥 Dispersar para Fora
         </button>
       </div>
     </div>
