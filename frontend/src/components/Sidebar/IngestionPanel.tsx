@@ -108,6 +108,31 @@ export const IngestionPanel: React.FC = () => {
     ? (videoFotos * videoIntervalo + videoHold + videoVoo + 3).toFixed(0)
     : null;
 
+  /**
+   * Espelha no painel o que veio do store.
+   *
+   * Os campos são estado local (rascunho antes de publicar), inicializado uma
+   * única vez no mount. Quando a config chega pronta de outro caminho — o
+   * "Encaixar Grade no Logo", uma carga inicial — os campos ficavam mostrando
+   * os valores antigos e pareciam travados.
+   */
+  useEffect(() => {
+    setLocalOffsetX(gridOffsetX);
+    setLocalOffsetY(gridOffsetY);
+    setLocalGridW(gridWidth);
+    setLocalGridH(gridHeight);
+  }, [gridOffsetX, gridOffsetY, gridWidth, gridHeight]);
+
+  useEffect(() => {
+    setLocalRows(rows);
+    setLocalCols(cols);
+  }, [rows, cols]);
+
+  useEffect(() => {
+    setLocalWidth(screenWidth);
+    setLocalHeight(screenHeight);
+  }, [screenWidth, screenHeight]);
+
   const handleGalleryTestPhotos = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!e.target.files?.length) return;
     setGeneratingPhotos(true);
@@ -397,65 +422,48 @@ export const IngestionPanel: React.FC = () => {
           <span>Dimensionar / Mover Grade</span>
         </div>
 
-        <div className="flex flex-col gap-1">
-          <div className="flex justify-between text-xs text-slate-400">
-            <span>Offset X (Posição H)</span>
-            <span className="font-mono text-cyan-300">{localOffsetX}px</span>
+        {/* Posição e tamanho da área do mosaico.
+            Os limites acompanham o telão mas vão além dele: a grade pode
+            legitimamente extrapolar a tela (sangria) e usar offset negativo,
+            que é o caso quando ela é alinhada a uma arte. Com os limites presos
+            em 0..telão, o slider travava no fim e o valor não voltava mais. */}
+        {([
+          ['Offset X (Posição H)', localOffsetX, -localWidth, localWidth,
+            (v: number) => handleApplyBounds(v, localOffsetY, localGridW, localGridH)],
+          ['Offset Y (Posição V)', localOffsetY, -localHeight, localHeight,
+            (v: number) => handleApplyBounds(localOffsetX, v, localGridW, localGridH)],
+          ['Largura da Grade', localGridW, 100, localWidth * 2,
+            (v: number) => handleApplyBounds(localOffsetX, localOffsetY, v, localGridH)],
+          ['Altura da Grade', localGridH, 100, localHeight * 2,
+            (v: number) => handleApplyBounds(localOffsetX, localOffsetY, localGridW, v)],
+        ] as const).map(([rotulo, valor, min, max, aplicar]) => (
+          <div key={rotulo} className="flex flex-col gap-1">
+            <div className="flex justify-between items-center text-xs text-slate-400">
+              <span>{rotulo}</span>
+              <div className="flex items-center gap-1">
+                {/* Campo numérico: para valor exato o slider não serve. */}
+                <input
+                  type="number"
+                  value={valor}
+                  onChange={(e) => {
+                    const n = parseInt(e.target.value, 10);
+                    if (!Number.isNaN(n)) aplicar(n);
+                  }}
+                  className="w-20 bg-slate-900 border border-slate-700 rounded px-1 py-0.5 text-[11px] font-mono text-cyan-300 text-right"
+                />
+                <span className="text-[10px] text-slate-500">px</span>
+              </div>
+            </div>
+            <input
+              type="range"
+              min={min}
+              max={max}
+              value={Math.min(max, Math.max(min, valor))}
+              onChange={(e) => aplicar(parseInt(e.target.value, 10))}
+              className="w-full h-1.5 bg-slate-700 rounded appearance-none cursor-pointer accent-cyan-400"
+            />
           </div>
-          <input
-            type="range"
-            min="0"
-            max={localWidth}
-            value={localOffsetX}
-            onChange={(e) => handleApplyBounds(parseInt(e.target.value), localOffsetY, localGridW, localGridH)}
-            className="w-full h-1.5 bg-slate-700 rounded appearance-none cursor-pointer accent-cyan-400"
-          />
-        </div>
-
-        <div className="flex flex-col gap-1">
-          <div className="flex justify-between text-xs text-slate-400">
-            <span>Offset Y (Posição V)</span>
-            <span className="font-mono text-cyan-300">{localOffsetY}px</span>
-          </div>
-          <input
-            type="range"
-            min="0"
-            max={localHeight}
-            value={localOffsetY}
-            onChange={(e) => handleApplyBounds(localOffsetX, parseInt(e.target.value), localGridW, localGridH)}
-            className="w-full h-1.5 bg-slate-700 rounded appearance-none cursor-pointer accent-cyan-400"
-          />
-        </div>
-
-        <div className="flex flex-col gap-1">
-          <div className="flex justify-between text-xs text-slate-400">
-            <span>Largura da Grade</span>
-            <span className="font-mono text-cyan-300">{localGridW}px</span>
-          </div>
-          <input
-            type="range"
-            min="100"
-            max={localWidth}
-            value={localGridW}
-            onChange={(e) => handleApplyBounds(localOffsetX, localOffsetY, parseInt(e.target.value), localGridH)}
-            className="w-full h-1.5 bg-slate-700 rounded appearance-none cursor-pointer accent-cyan-400"
-          />
-        </div>
-
-        <div className="flex flex-col gap-1">
-          <div className="flex justify-between text-xs text-slate-400">
-            <span>Altura da Grade</span>
-            <span className="font-mono text-cyan-300">{localGridH}px</span>
-          </div>
-          <input
-            type="range"
-            min="100"
-            max={localHeight}
-            value={localGridH}
-            onChange={(e) => handleApplyBounds(localOffsetX, localOffsetY, localGridW, parseInt(e.target.value))}
-            className="w-full h-1.5 bg-slate-700 rounded appearance-none cursor-pointer accent-cyan-400"
-          />
-        </div>
+        ))}
       </div>
 
       {/* 4. Estilo Visual das Linhas da Grade */}
