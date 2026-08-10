@@ -200,6 +200,8 @@ backend/storage/tiles/
 backend/storage/exports/
 backend/storage/print_out/
 backend/storage/foreground.png
+# Cópia da arte original, guardada antes de abrir o miolo da marca.
+backend/storage/foreground_sem_miolo.png
 backend/storage/target_base.jpg
 backend/storage/s3_seen.json
 backend/storage/run_state.json
