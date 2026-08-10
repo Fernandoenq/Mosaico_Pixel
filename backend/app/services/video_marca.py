@@ -98,6 +98,7 @@ def gerar_video_marca(
     duracao_voo: float = 0.6,
     segundos_finais: float = 3.0,
     cor_marca: tuple[int, int, int] = (28, 28, 226),  # BGR do vermelho HSBC
+    ordem: str = "linha",
     progresso: Callable[[int], None] | None = None,
 ) -> dict:
     if not fotos:
@@ -122,13 +123,27 @@ def gerar_video_marca(
     if not alvos:
         raise ValueError("Nenhuma célula da grade cai dentro do desenho da marca.")
 
-    # Preenche do centro para fora: o logo "cresce" em vez de aparecer em faixas.
-    cx_grade, cy_grade = cols / 2, rows / 2
-    alvos.sort(key=lambda a: math.hypot(a[1] - cx_grade, a[0] - cy_grade))
+    if ordem == "centro":
+        # Do centro para fora: o logo "cresce" em vez de aparecer em faixas.
+        cx_grade, cy_grade = cols / 2, rows / 2
+        alvos.sort(key=lambda a: math.hypot(a[1] - cx_grade, a[0] - cy_grade))
+    else:
+        # Linha a linha, de cima para baixo — o mesmo desenho que o telão faz
+        # ao vivo. O vídeo tem que ser o registro do que aconteceu na tela, não
+        # uma segunda coreografia.
+        alvos.sort(key=lambda a: (a[0], a[1]))
 
-    # Recorte quadrado de cada foto, no tamanho do ladrilho, já tingido.
+    # Quais células saem TINGIDAS. A pintura do painel manda: célula pintada
+    # entra na cor da marca, célula sem pintura entra na cor original — é a
+    # mesma regra do telão, e é o que deixa o miolo do logo com as fotos como
+    # elas são. Sem nenhuma pintura definida, tinge tudo (comportamento antigo).
+    pintadas = set((config.get("cellFilters") or {}).keys())
+    tinge_tudo = not pintadas
+
+    # Recorte quadrado de cada foto, no tamanho do ladrilho, nas duas versões.
     lado_tile = (max(1, int(round(tw))), max(1, int(round(th))))
     cache_tile: list[np.ndarray] = []
+    cache_tile_original: list[np.ndarray] = []
     cache_grande: list[np.ndarray] = []
     lado_central = int(min(largura, altura) * 0.42)
 
@@ -140,7 +155,9 @@ def gerar_video_marca(
         y0 = (img.shape[0] - lado) // 2
         x0 = (img.shape[1] - lado) // 2
         quadrado = img[y0:y0 + lado, x0:x0 + lado]
-        cache_tile.append(tingir(cv2.resize(quadrado, lado_tile, interpolation=cv2.INTER_AREA), cor_marca))
+        pequena = cv2.resize(quadrado, lado_tile, interpolation=cv2.INTER_AREA)
+        cache_tile.append(tingir(pequena, cor_marca))
+        cache_tile_original.append(pequena)
         cache_grande.append(cv2.resize(quadrado, (lado_central, lado_central), interpolation=cv2.INTER_AREA))
 
     if not cache_tile:
@@ -169,7 +186,8 @@ def gerar_video_marca(
                 t_pouso = proxima * intervalo_entre_fotos + hold_central + duracao_voo
                 if t < t_pouso:
                     break
-                tile = cache_tile[proxima % len(cache_tile)]
+                banco = cache_tile if (tinge_tudo or f"{r}_{c}" in pintadas) else cache_tile_original
+                tile = banco[proxima % len(banco)]
                 y0 = int(round(offy + r * th))
                 x0 = int(round(offx + c * tw))
                 y1, x1 = y0 + tile.shape[0], x0 + tile.shape[1]
@@ -218,10 +236,13 @@ def gerar_video_marca(
     finally:
         escritor.release()
 
+    na_cor_original = 0 if tinge_tudo else sum(1 for r, c, _ in alvos if f"{r}_{c}" not in pintadas)
     return {
         "arquivo": str(saida),
         "celulas": len(alvos),
+        "corOriginal": na_cor_original,
         "fotos": len(cache_tile),
+        "ordem": ordem,
         "duracao": round(total_secs, 1),
         "resolucao": f"{largura}x{altura}",
     }

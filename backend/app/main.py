@@ -1061,6 +1061,9 @@ class OpcoesVideoMarca(BaseModel):
     duracaoVoo: float = 0.6
     segundosFinais: float = 3.0
     corMarca: str = "#e21c1c"  # vermelho HSBC
+    # "linha": de cima para baixo, como o telão desenha ao vivo. "centro": o
+    # logo cresce do meio para as bordas.
+    ordem: str = "linha"
 
 
 def _hex_para_bgr(valor: str, padrao: tuple[int, int, int] = (28, 28, 226)) -> tuple[int, int, int]:
@@ -1457,6 +1460,7 @@ async def start_video_marca(opcoes: OpcoesVideoMarca | None = None):
                 duracao_voo=voo,
                 segundos_finais=finais,
                 cor_marca=cor,
+                ordem="centro" if o.ordem == "centro" else "linha",
                 progresso=lambda p: exports[export_id].update(progress=p),
             )
             exports[export_id].update(status="done", progress=100,
