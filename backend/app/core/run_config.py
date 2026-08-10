@@ -50,6 +50,7 @@ FILL_SEQUENCES = {
     "bottom_to_top",
     "center_out",
     "random",
+    "brand_first",
 }
 # "auto" = cada preset roda a sua curva característica (PRESET_DEFAULT_EASE no
 # frontend). Qualquer outro valor é aplicado ao voo principal de todos eles.

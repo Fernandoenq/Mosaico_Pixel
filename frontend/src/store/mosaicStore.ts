@@ -112,7 +112,7 @@ export interface MosaicStore {
   selectedBrushFilter: string;
 
   // Ordem de Preenchimento & Auto-Duplicação
-  fillSequence: 'color_match' | 'top_to_bottom' | 'bottom_to_top' | 'center_out' | 'random';
+  fillSequence: 'color_match' | 'top_to_bottom' | 'bottom_to_top' | 'center_out' | 'random' | 'brand_first';
   autoDuplicateToFill: boolean;
 
   duplicateDistLimit: number;
@@ -162,7 +162,7 @@ export interface MosaicStore {
   setIdleReplay: (enabled: boolean, delay: number, interval: number) => void;
   setBrushModeActive: (active: boolean) => void;
   setSelectedBrushFilter: (filterId: string) => void;
-  setFillSequence: (seq: 'color_match' | 'top_to_bottom' | 'bottom_to_top' | 'center_out' | 'random') => void;
+  setFillSequence: (seq: 'color_match' | 'top_to_bottom' | 'bottom_to_top' | 'center_out' | 'random' | 'brand_first') => void;
   setAutoDuplicateToFill: (enabled: boolean) => void;
   setAutoPlaceMode: (enabled: boolean) => void;
   paintCell: (row: number, col: number, filterId?: string) => void;

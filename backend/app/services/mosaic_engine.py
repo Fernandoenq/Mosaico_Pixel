@@ -14,6 +14,10 @@ class MosaicEngine:
         # dele, então alocar uma foto ali equivale a perdê-la.
         self.container_shape = container_shape
         self.custom_mask_cells = set(custom_mask_cells) if custom_mask_cells else set()
+        # Ordem de prioridade da máscara: quem vem antes na lista é preenchido
+        # antes na sequência "brand_first". O gerador da grade entrega as
+        # células ordenadas da mais visível para a menos visível.
+        self.mask_order = self._indexar_mascara(custom_mask_cells)
         self.target_image = target_image_bgr
         self.h, self.w = target_image_bgr.shape[:2]
         self.tile_h = self.h // rows
@@ -79,9 +83,24 @@ class MosaicEngine:
             self.locked_tiles.discard(cell)
         return orphans
 
+    @staticmethod
+    def _indexar_mascara(custom_mask_cells: list | None) -> dict:
+        """Posição de cada célula na lista da máscara, para ordenar depois."""
+        if not custom_mask_cells:
+            return {}
+        ordem = {}
+        for i, chave in enumerate(custom_mask_cells):
+            try:
+                r, c = (int(x) for x in str(chave).split("_"))
+            except (ValueError, TypeError):
+                continue
+            ordem.setdefault((r, c), i)
+        return ordem
+
     def set_container_shape(self, shape: str, custom_mask_cells: list = None):
         self.container_shape = shape
         self.custom_mask_cells = set(custom_mask_cells) if custom_mask_cells else set()
+        self.mask_order = self._indexar_mascara(custom_mask_cells)
 
     def update_grid(self, target_image_bgr: np.ndarray, rows: int, cols: int):
         self.rows = rows
@@ -121,6 +140,7 @@ class MosaicEngine:
         - bottom_to_top: Sequencial de baixo para cima
         - center_out: Expansão a partir do centro
         - random: Seleção aleatória
+        - brand_first: Ordem da máscara da marca (mais visível primeiro)
         """
         # Só células dentro do contorno: as de fora não são desenhadas pelo
         # telão, então colocar uma foto ali é o mesmo que descartá-la.
@@ -153,6 +173,18 @@ class MosaicEngine:
         elif fill_sequence == "center_out":
             cr, cc = self.rows / 2.0, self.cols / 2.0
             empty_cells.sort(key=lambda cell: (cell[0] - cr) ** 2 + (cell[1] - cc) ** 2)
+            best_cell = empty_cells[0]
+            best_score = 0.0
+        elif fill_sequence == "brand_first":
+            # Preenche pela ordem da máscara da marca: os losangos cheios
+            # primeiro, o halftone das pontas por último. Com poucas fotos o
+            # logo já nasce legível, em vez de começar pelos pontinhos onde a
+            # foto aparece do tamanho de um grão.
+            if self.mask_order:
+                empty_cells.sort(key=lambda cell: self.mask_order.get(cell, 10**9))
+            else:
+                cr, cc = self.rows / 2.0, self.cols / 2.0
+                empty_cells.sort(key=lambda cell: (cell[0] - cr) ** 2 + (cell[1] - cc) ** 2)
             best_cell = empty_cells[0]
             best_score = 0.0
         elif fill_sequence == "random":

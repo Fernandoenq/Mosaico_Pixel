@@ -895,7 +895,15 @@ async def grade_da_marca(cobertura: float = 0.15):
         float(c.get("gridHeight", c.get("screenHeight", 1080))),
     )
 
-    celulas = [f"{r}_{col}" for r, col, fracao in encontradas if fracao >= limite]
+    # Ordena da célula mais coberta pela arte para a menos coberta. A ordem vira
+    # a prioridade de preenchimento em `brand_first`: as primeiras fotos caem
+    # nos losangos cheios, onde aparecem inteiras, e não nos pontinhos do
+    # halftone, onde mal se enxerga um pedaço.
+    validas = sorted(
+        (c for c in encontradas if c[2] >= limite),
+        key=lambda c: -c[2],
+    )
+    celulas = [f"{r}_{col}" for r, col, _ in validas]
     if not celulas:
         raise HTTPException(
             status_code=409,

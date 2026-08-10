@@ -812,12 +812,18 @@ export const IngestionPanel: React.FC = () => {
           onChange={(e) => useMosaicStore.getState().setFillSequence(e.target.value as any)}
           className="bg-slate-900 border border-slate-700 rounded p-2 text-xs text-slate-200"
         >
+          <option value="brand_first">◆ Desenho da Marca (mais visível primeiro)</option>
           <option value="color_match">🎨 Melhor Combinação de Cores (LAB Perceptual)</option>
           <option value="top_to_bottom">⬇️ Cima para Baixo (Linha por Linha)</option>
           <option value="bottom_to_top">⬆️ Baixo para Cima</option>
           <option value="center_out">🎯 Do Centro para as Bordas (Espiral)</option>
           <option value="random">🎲 Aleatório (Random)</option>
         </select>
+        <span className="text-[10px] text-slate-500 leading-snug">
+          "Desenho da Marca" usa o recorte do logo: as primeiras fotos vão para os
+          losangos cheios, onde aparecem inteiras, e o halftone das pontas fica
+          para o fim. Precisa do contorno em "Formato do Logo".
+        </span>
       </div>
 
       {/* 7. Duplicar Fotos para Fechar o Mosaico */}
