@@ -168,7 +168,9 @@ export const animateTileFlight = ({
   // um retângulo brilhante atravessando a tela.
   cardBorder.visible = centralPreviewEnabled;
   wrapper.addChild(cardBorder);
-  applySpriteFilter(previewSprite, cellFilter);
+  // Em voo a foto vai na cor ORIGINAL: o cartão central existe para a pessoa se
+  // ver, e com o tinte da célula de destino ela se via vermelha ou dourada. A
+  // cor da marca entra só no pouso — é o mesmo que o vídeo de referência faz.
   wrapper.addChild(previewSprite);
 
   flyingContainer.addChild(wrapper);
