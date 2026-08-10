@@ -20,6 +20,7 @@ export const IngestionPanel: React.FC = () => {
     customMaskCells,
     duplicateDistLimit,
     colorStrictness,
+    fillSequence,
     autoDuplicateToFill,
     duplicateIntervalSeconds,
     setAutoDuplicateToFill,
@@ -194,6 +195,34 @@ export const IngestionPanel: React.FC = () => {
       alert(err instanceof Error ? err.message : 'Falha ao encaixar a grade');
     } finally {
       setGerandoGrade(false);
+    }
+  };
+
+  const [publicandoOrdem, setPublicandoOrdem] = useState(false);
+
+  /**
+   * Troca a ordem de preenchimento e publica na hora.
+   *
+   * O `select` daqui só mexia no store e esperava o "Aplicar" — e ainda lia o
+   * valor por `getState()`, fora do hook, então nem refletia mudança vinda do
+   * servidor. Trocar o desenho do mosaico é decisão de operação, tem que valer
+   * no clique.
+   */
+  const handleOrdemRapida = async (seq: string) => {
+    setPublicandoOrdem(true);
+    try {
+      const res = await fetch('/api/config', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ fillSequence: seq }),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      useMosaicStore.getState().setFillSequence(seq as any);
+      useMosaicStore.getState().markConfigApplied();
+    } catch (err) {
+      alert(err instanceof Error ? err.message : 'Falha ao mudar a ordem de preenchimento');
+    } finally {
+      setPublicandoOrdem(false);
     }
   };
 
@@ -1037,9 +1066,33 @@ export const IngestionPanel: React.FC = () => {
           <span>Ordem de Preenchimento do Mosaico</span>
         </div>
 
+        {/* Atalho das duas ordens que se usa no evento. Publica direto, sem
+            passar pelo "Aplicar": trocar o desenho no meio do show não pode
+            arrastar junto o rascunho das outras abas. */}
+        <div className="flex gap-1.5">
+          {([
+            { valor: 'top_to_bottom', rotulo: '⬇ Linha a linha' },
+            { valor: 'random', rotulo: '🎲 Aleatório' },
+          ] as const).map((opcao) => (
+            <button
+              key={opcao.valor}
+              onClick={() => handleOrdemRapida(opcao.valor)}
+              disabled={publicandoOrdem}
+              className={`flex-1 text-[11px] font-bold py-1.5 rounded-lg border transition active:scale-95 disabled:opacity-50 ${
+                fillSequence === opcao.valor
+                  ? 'bg-cyan-600 text-white border-cyan-400/50'
+                  : 'bg-slate-900 text-slate-400 border-slate-700 hover:bg-slate-800'
+              }`}
+            >
+              {opcao.rotulo}
+            </button>
+          ))}
+        </div>
+
         <select
-          value={useMosaicStore.getState().fillSequence}
-          onChange={(e) => useMosaicStore.getState().setFillSequence(e.target.value as any)}
+          value={fillSequence}
+          onChange={(e) => handleOrdemRapida(e.target.value as any)}
+          disabled={publicandoOrdem}
           className="bg-slate-900 border border-slate-700 rounded p-2 text-xs text-slate-200"
         >
           <option value="brand_first">◆ Desenho da Marca (mais visível primeiro)</option>
@@ -1050,9 +1103,10 @@ export const IngestionPanel: React.FC = () => {
           <option value="random">🎲 Aleatório (Random)</option>
         </select>
         <span className="text-[10px] text-slate-500 leading-snug">
-          "Desenho da Marca" usa o recorte do logo: as primeiras fotos vão para os
-          losangos cheios, onde aparecem inteiras, e o halftone das pontas fica
-          para o fim. Precisa do contorno em "Formato do Logo".
+          "Linha a linha" desenha o mosaico de cima para baixo, com o logo sempre
+          por cima. "Desenho da Marca" usa o recorte do logo: as primeiras fotos
+          vão para os losangos cheios, onde aparecem inteiras, e o halftone das
+          pontas fica para o fim — precisa do contorno em "Formato do Logo".
         </span>
       </div>
 

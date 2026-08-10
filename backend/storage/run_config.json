@@ -1229,7 +1229,7 @@
     "28_40"
   ],
   "selectedBrushFilter": "none",
-  "fillSequence": "brand_first",
+  "fillSequence": "top_to_bottom",
   "autoDuplicateToFill": true,
   "duplicateIntervalSeconds": 4.5,
   "duplicateDistLimit": 3,
