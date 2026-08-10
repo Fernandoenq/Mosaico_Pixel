@@ -157,7 +157,14 @@ class MosaicEngine:
                 if (r, c) not in self.locked_tiles and self.cell_in_container(r, c)
             ]
             if not empty_cells:
-                empty_cells = [(0, 0)]
+                # Nem uma célula dentro do contorno: cair na (0,0) colocava a
+                # foto FORA do desenho da marca, onde o telão nem a desenha.
+                # Melhor não posicionar e deixar o log dizer o porquê.
+                print(
+                    f"[MosaicEngine] Nenhuma célula disponível em '{self.container_shape}' "
+                    f"({len(self.custom_mask_cells)} na máscara) — foto não posicionada."
+                )
+                return None, None, 0.0
 
         if is_full:
             import random

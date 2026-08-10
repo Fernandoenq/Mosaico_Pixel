@@ -26,11 +26,17 @@ class MosaicState:
         self.has_target_image = False
 
         self.target_image_bgr = self._build_placeholder_target()
+        # As células do contorno personalizado precisam vir JUNTO na construção.
+        # Sem elas o motor nascia com `container_shape="custom_mask"` e a máscara
+        # vazia: nenhuma célula era considerada válida e toda foto acabava na
+        # (0,0), o último recurso de `find_best_tile_position`. Só aparecia
+        # depois de um restart do backend, quando a config já vem do disco.
         self.engine = MosaicEngine(
             self.target_image_bgr,
             self.rows,
             self.cols,
             container_shape=self.container_shape,
+            custom_mask_cells=self.custom_mask_cells,
         )
         self.queue_manager = QueueManager()
 
