@@ -713,7 +713,18 @@ async def auto_fill_duplicates(fill_sequence: str | None = None):
     Preenche todas as células vagas restantes no mosaico duplicando fotos aprovadas ou existentes.
     """
     fill_sequence = fill_sequence or state.fill_sequence
-    available_photos = state.queue_manager.approved_photos
+    # A fila usa a chave "id"; ler "photo_id" aqui estourava KeyError e derrubava
+    # o endpoint com 500 sempre que HAVIA foto aprovada — justamente o caso
+    # normal de uso. Só o fallback dos tiles em disco funcionava.
+    available_photos = [
+        {
+            "photo_id": item.get("id") or item.get("photo_id"),
+            "url": item["url"],
+            "local_path": item["local_path"],
+        }
+        for item in state.queue_manager.approved_photos
+        if item.get("url") and item.get("local_path")
+    ]
     if not available_photos:
         tile_files = list(settings.TILES_DIR.glob("*.jpg"))
         if not tile_files:
@@ -721,39 +732,61 @@ async def auto_fill_duplicates(fill_sequence: str | None = None):
         available_photos = [{"photo_id": f.stem, "url": f"/storage/tiles/{f.name}", "local_path": str(f)} for f in tile_files]
 
     placed_count = 0
+    ilegiveis = 0
     total_cells = state.engine.rows * state.engine.cols
 
     for i in range(total_cells):
-        empty_count = len(state.engine.available_cells())
-        if empty_count == 0:
+        if not state.engine.available_cells():
             break
 
         item = available_photos[i % len(available_photos)]
         img_bgr = cv2.imread(item["local_path"])
         if img_bgr is None:
+            ilegiveis += 1
+            # Sem esta saída, um lote inteiro de arquivos ilegíveis faria o laço
+            # girar `total_cells` vezes sem colocar nada.
+            if ilegiveis >= len(available_photos):
+                break
             continue
+
+        # O id precisa ser único por ladrilho: o motor indexa placed_tiles por
+        # photo_id, e repetir o mesmo id faria a duplicata sobrescrever a
+        # original em vez de ocupar uma célula nova.
+        photo_id = f"{item['photo_id']}_dup_{i}"
 
         r, c, score = state.engine.find_best_tile_position(
             img_bgr,
-            item["photo_id"],
+            photo_id,
             duplicate_dist_limit=0,
             strictness=state.color_strictness,
             fill_sequence=fill_sequence
         )
+        if r is None:
+            # Sem célula dentro do contorno — não há o que preencher.
+            break
 
-        placement = {
-            "photo_id": f"{item['photo_id']}_dup_{i}",
+        await broadcast_event("TILE_PLACED", {
+            "photo_id": photo_id,
             "url": item["url"],
             "row": r,
             "col": c,
             "target_x": c * state.engine.tile_w,
             "target_y": r * state.engine.tile_h,
-            "score": score
-        }
+            "score": score,
+        })
         placed_count += 1
-        await broadcast_event("TILE_PLACED", placement)
+        # Dá respiro ao event loop: sem isso, preencher centenas de células
+        # segurava o servidor e o telão recebia tudo de uma vez no fim.
+        await asyncio.sleep(0.02)
 
-    return {"status": "success", "placed_count": placed_count}
+    restantes = len(state.engine.available_cells())
+    print(f"[AutoFill] {placed_count} duplicata(s) posicionada(s); {restantes} célula(s) ainda vaga(s).")
+    return {
+        "status": "success",
+        "placed_count": placed_count,
+        "restantes": restantes,
+        "ilegiveis": ilegiveis,
+    }
 
 @app.post("/api/mosaic/outro")
 async def play_mosaic_outro():

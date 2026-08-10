@@ -52,6 +52,42 @@ export const IngestionPanel: React.FC = () => {
   const [exportId, setExportId] = useState<string | null>(null);
   const [exportError, setExportError] = useState<string>('');
 
+  const [duplicando, setDuplicando] = useState(false);
+  const [resultadoDuplicar, setResultadoDuplicar] = useState<{ texto: string; erro: boolean } | null>(null);
+
+  /**
+   * Preenche as células vagas duplicando fotos já aprovadas.
+   *
+   * O botão antes disparava e esquecia: um 400 (sem foto para duplicar) ou um
+   * 500 passavam sem nenhum sinal na tela, e dava para clicar várias vezes
+   * enquanto o servidor ainda preenchia.
+   */
+  const handleDuplicar = async () => {
+    setDuplicando(true);
+    setResultadoDuplicar(null);
+    try {
+      const seq = useMosaicStore.getState().fillSequence;
+      const res = await fetch(`/api/mosaic/auto-fill-duplicates?fill_sequence=${seq}`, { method: 'POST' });
+      const dados = await res.json();
+      if (!res.ok) throw new Error(dados?.detail || 'Falha ao preencher');
+      setResultadoDuplicar({
+        erro: false,
+        texto:
+          dados.placed_count === 0
+            ? 'Nada a preencher — o mosaico já está completo.'
+            : `${dados.placed_count} célula(s) preenchida(s).` +
+              (dados.restantes ? ` ${dados.restantes} ainda vaga(s).` : ' Mosaico completo.'),
+      });
+    } catch (err) {
+      setResultadoDuplicar({
+        erro: true,
+        texto: err instanceof Error ? err.message : 'Falha ao preencher o mosaico',
+      });
+    } finally {
+      setDuplicando(false);
+    }
+  };
+
   const [coberturaGrade, setCoberturaGrade] = useState(0.05);
   const [distribuicaoGrade, setDistribuicaoGrade] = useState('aleatorio');
   const [gerandoGrade, setGerandoGrade] = useState(false);
@@ -856,15 +892,19 @@ export const IngestionPanel: React.FC = () => {
         </p>
 
         <button
-          onClick={async () => {
-            const seq = useMosaicStore.getState().fillSequence;
-            await fetch(`/api/mosaic/auto-fill-duplicates?fill_sequence=${seq}`, { method: 'POST' });
-          }}
-          className="w-full bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-bold text-xs py-2 rounded-lg transition shadow-md flex items-center justify-center gap-1.5 border border-emerald-400/40 active:scale-95"
+          onClick={handleDuplicar}
+          disabled={duplicando}
+          className="w-full bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 disabled:from-slate-700 disabled:to-slate-700 disabled:text-slate-500 text-white font-bold text-xs py-2 rounded-lg transition shadow-md flex items-center justify-center gap-1.5 border border-emerald-400/40 disabled:border-slate-600 active:scale-95"
         >
           <Check className="w-4 h-4 text-emerald-200" />
-          <span>⚡ Preencher Todo o Mosaico (Duplicar Fotos)</span>
+          <span>{duplicando ? 'Preenchendo...' : '⚡ Preencher Todo o Mosaico (Duplicar Fotos)'}</span>
         </button>
+
+        {resultadoDuplicar && (
+          <span className={`text-[10px] leading-snug ${resultadoDuplicar.erro ? 'text-rose-400' : 'text-emerald-400'}`}>
+            {resultadoDuplicar.texto}
+          </span>
+        )}
       </div>
 
       {/* 6. Hot Folder Watcher Input */}
