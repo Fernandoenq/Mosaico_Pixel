@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import * as PIXI from 'pixi.js';
-import { useMosaicStore } from '../../store/mosaicStore';
+import { useMosaicStore, MosaicStore } from '../../store/mosaicStore';
 import { animateMosaicOutro, animateTileFlight, applySpriteFilter, previewCardSize } from '../../utils/gsapAnimations';
 import { MiniMap } from './MiniMap';
 import { MagnifierLens } from './MagnifierLens';
@@ -116,8 +116,20 @@ export const PixiViewport: React.FC = () => {
   const animationQueue = useRef<any[]>([]);
   const isAnimating = useRef(false);
 
-  // Teto por foto antes de destravar a fila à força.
-  const ANIMATION_TIMEOUT_MS = 15000;
+  /**
+   * Teto por foto antes de destravar a fila à força.
+   *
+   * Era fixo em 15s, mas a animação já passa disso com o preview central no
+   * máximo (0,35s de entrada + 15s de hold + o voo): o guarda disparava NO MEIO
+   * do preview, a fila seguia e a foto seguinte entrava por cima da que ainda
+   * estava na tela — duas ao mesmo tempo. Agora o teto acompanha o que está
+   * configurado, com folga.
+   */
+  const tempoLimiteDaAnimacao = (store: MosaicStore) => {
+    const hold = store.centralPreviewEnabled ? store.centralPreviewDuration : 0;
+    const previsto = 0.75 + hold + store.animationDuration * 2;
+    return Math.max(15000, Math.round(previsto * 1000 * 1.5));
+  };
 
   const drawBaseImage = () => {
     const targetUrl = useMosaicStore.getState().targetBaseUrl;
@@ -306,7 +318,7 @@ export const PixiViewport: React.FC = () => {
         const guard = window.setTimeout(() => {
           console.warn('[Mosaico] Animação não completou a tempo; seguindo a fila.');
           finish();
-        }, ANIMATION_TIMEOUT_MS);
+        }, tempoLimiteDaAnimacao(store));
 
         try {
           animateTileFlight({

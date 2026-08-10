@@ -176,6 +176,23 @@ def _fotos_reais_no_mosaico() -> list[tuple[str, str]]:
     return reais
 
 
+def _espera_entre_copias() -> float:
+    """
+    Segundos entre uma cópia e a seguinte.
+
+    `duplicateIntervalSeconds` é o respiro DEPOIS que o telão termina de exibir
+    a cópia anterior, não o intervalo bruto. Mandando pelo valor cru, o laço
+    soltava uma cópia a cada 3s enquanto cada uma leva uns 12s na tela: a fila
+    do telão crescia sem parar e as fotos acabavam se atropelando.
+    """
+    config = state.config
+    hold = float(config.get("centralPreviewDuration", 10.0)) if config.get("centralPreviewEnabled", True) else 0.0
+    exibicao = 0.75 + hold + float(config.get("animationDuration", 0.8)) * 2
+    respiro = float(config.get("previewGapSeconds", 1.5))
+    intervalo = float(config.get("duplicateIntervalSeconds", 3.0))
+    return max(0.2, exibicao + respiro, intervalo)
+
+
 async def _laco_duplicacao():
     """
     Duplicação GRADUAL, enquanto o interruptor estiver ligado.
@@ -193,8 +210,7 @@ async def _laco_duplicacao():
     print("[Duplicação] Ligada — copiando as fotos do mosaico aos poucos.")
     try:
         while state.config.get("autoDuplicateToFill", False):
-            intervalo = float(state.config.get("duplicateIntervalSeconds", 3.0))
-            await asyncio.sleep(max(0.2, intervalo))
+            await asyncio.sleep(_espera_entre_copias())
 
             if state.run_state != "running":
                 continue

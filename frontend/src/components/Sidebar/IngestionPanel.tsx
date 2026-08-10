@@ -98,7 +98,7 @@ export const IngestionPanel: React.FC = () => {
       if (ligar) {
         setResultadoDuplicar({
           erro: false,
-          texto: `Duplicando aos poucos: uma cópia a cada ${intervaloDup}s, com animação de foto nova.`,
+          texto: `Duplicando aos poucos: a próxima cópia entra ${intervaloDup}s depois de o telão terminar a anterior.`,
         });
         return;
       }
@@ -1003,7 +1003,9 @@ export const IngestionPanel: React.FC = () => {
         </label>
 
         <label className="flex items-center justify-between gap-2 text-[10px] text-slate-400">
-          <span>Uma cópia a cada</span>
+          <span title="Contado DEPOIS que o telão termina de exibir a cópia anterior, para as fotos não se atropelarem.">
+            Respiro entre cópias
+          </span>
           <div className="flex items-center gap-1.5 flex-1 max-w-[150px]">
             <input
               type="range"
