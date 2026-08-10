@@ -529,6 +529,17 @@ export const PixiViewport: React.FC = () => {
     drawForegroundLogo();
   }, [foregroundUrl, screenWidth, screenHeight]);
 
+  /**
+   * No painel a grade sobe para cima do overlay da marca; no telão volta para o
+   * lugar dela. Com um overlay opaco na Camada 4, a grade (Camada 3) ficava
+   * escondida atrás dele e não dava para enxergar onde as fotos vão cair.
+   */
+  useEffect(() => {
+    const grade = layer3Grid.current;
+    if (grade) grade.zIndex = displayMode ? 3 : 98;
+    drawGrid();
+  }, [displayMode, foregroundUrl]);
+
   useEffect(() => {
     const layerMap: Record<string, PIXI.Container | PIXI.Graphics | null> = {
       base: layer0Base.current,
@@ -653,7 +664,15 @@ export const PixiViewport: React.FC = () => {
 
     g.clear();
     const hexColor = parseInt(gridColor.replace('#', '0x'), 16) || 0x00ffff;
-    g.lineStyle(gridThickness, hexColor, gridOpacity);
+
+    /**
+     * No painel a grade é a ferramenta de trabalho: precisa ser visível mesmo
+     * com a opacidade zerada para o telão. Com um overlay de marca por cima,
+     * sem isso o operador fica sem nenhuma referência de onde as fotos caem.
+     * No telão o valor da config é respeitado como está.
+     */
+    const opacidadeGrade = displayMode ? gridOpacity : Math.max(0.55, gridOpacity);
+    g.lineStyle(gridThickness, hexColor, opacidadeGrade);
 
     const gw = gridWidth > 0 ? gridWidth : screenWidth;
     const gh = gridHeight > 0 ? gridHeight : screenHeight;
@@ -713,26 +732,26 @@ export const PixiViewport: React.FC = () => {
       g.endFill();
     });
 
-    g.lineStyle(gridThickness, hexColor, gridOpacity);
+    g.lineStyle(gridThickness, hexColor, opacidadeGrade);
 
     if (gridContainerShape === 'diamond_mask') {
       // Borda Externa em Formato de Losango / Diamante (HSBC Logo Bounding Diamond)
       const cx = gridOffsetX + gw / 2;
       const cy = gridOffsetY + gh / 2;
-      g.lineStyle(gridThickness + 2, hexColor, Math.min(1.0, gridOpacity + 0.25));
+      g.lineStyle(gridThickness + 2, hexColor, Math.min(1.0, opacidadeGrade + 0.25));
       g.moveTo(cx, gridOffsetY);
       g.lineTo(gridOffsetX + gw, cy);
       g.lineTo(cx, gridOffsetY + gh);
       g.lineTo(gridOffsetX, cy);
       g.lineTo(cx, gridOffsetY);
-      g.lineStyle(gridThickness, hexColor, gridOpacity);
+      g.lineStyle(gridThickness, hexColor, opacidadeGrade);
     } else if (gridContainerShape === 'hexagon_mask' || gridContainerShape === 'hexagon_halftone') {
       // Borda Externa em Formato de Hexágono
       const cx = gridOffsetX + gw / 2;
       const cy = gridOffsetY + gh / 2;
       const rx = gw / 2;
       const ry = gh / 2;
-      g.lineStyle(gridThickness + 2, hexColor, Math.min(1.0, gridOpacity + 0.25));
+      g.lineStyle(gridThickness + 2, hexColor, Math.min(1.0, opacidadeGrade + 0.25));
       for (let k = 0; k < 6; k++) {
         const angle = (Math.PI / 3) * k - Math.PI / 6;
         const x = cx + rx * Math.cos(angle);
@@ -742,14 +761,14 @@ export const PixiViewport: React.FC = () => {
       }
       const firstAngle = -Math.PI / 6;
       g.lineTo(cx + rx * Math.cos(firstAngle), cy + ry * Math.sin(firstAngle));
-      g.lineStyle(gridThickness, hexColor, gridOpacity);
+      g.lineStyle(gridThickness, hexColor, opacidadeGrade);
     } else if (gridContainerShape === 'circle_mask') {
       // Borda Externa em Formato Circular / Elipse
       const cx = gridOffsetX + gw / 2;
       const cy = gridOffsetY + gh / 2;
-      g.lineStyle(gridThickness + 2, hexColor, Math.min(1.0, gridOpacity + 0.25));
+      g.lineStyle(gridThickness + 2, hexColor, Math.min(1.0, opacidadeGrade + 0.25));
       g.drawEllipse(cx, cy, gw / 2, gh / 2);
-      g.lineStyle(gridThickness, hexColor, gridOpacity);
+      g.lineStyle(gridThickness, hexColor, opacidadeGrade);
     } else {
       // Borda Retangular Padrão
       g.drawRect(gridOffsetX, gridOffsetY, gw, gh);
