@@ -20,6 +20,9 @@ export const IngestionPanel: React.FC = () => {
     customMaskCells,
     duplicateDistLimit,
     colorStrictness,
+    autoDuplicateToFill,
+    setAutoDuplicateToFill,
+    markConfigApplied,
     hotFolderDir,
     targetBaseUrl,
     setTargetBaseUrl,
@@ -62,26 +65,43 @@ export const IngestionPanel: React.FC = () => {
    * 500 passavam sem nenhum sinal na tela, e dava para clicar várias vezes
    * enquanto o servidor ainda preenchia.
    */
-  const handleDuplicar = async () => {
+  const handleDuplicar = async (ligar: boolean) => {
     setDuplicando(true);
     setResultadoDuplicar(null);
     try {
       const seq = useMosaicStore.getState().fillSequence;
-      const res = await fetch(`/api/mosaic/auto-fill-duplicates?fill_sequence=${seq}`, { method: 'POST' });
+      const rota = ligar
+        ? `/api/mosaic/auto-fill-duplicates?fill_sequence=${seq}`
+        : '/api/mosaic/remove-duplicates';
+      const res = await fetch(rota, { method: 'POST' });
       const dados = await res.json();
-      if (!res.ok) throw new Error(dados?.detail || 'Falha ao preencher');
+      if (!res.ok) throw new Error(dados?.detail || 'Falha ao mudar a duplicação');
+
+      // Publica direto, sem passar pelo "Aplicar": arrastaria junto qualquer
+      // rascunho ainda não publicado das outras abas.
+      await fetch('/api/config', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ autoDuplicateToFill: ligar }),
+      });
+      setAutoDuplicateToFill(ligar);
+      markConfigApplied();
+
       setResultadoDuplicar({
         erro: false,
-        texto:
-          dados.placed_count === 0
+        texto: ligar
+          ? dados.placed_count === 0
             ? 'Nada a preencher — o mosaico já está completo.'
             : `${dados.placed_count} célula(s) preenchida(s).` +
-              (dados.restantes ? ` ${dados.restantes} ainda vaga(s).` : ' Mosaico completo.'),
+              (dados.restantes ? ` ${dados.restantes} ainda vaga(s).` : ' Mosaico completo.')
+          : dados.removed_count === 0
+            ? 'Não havia cópia no mosaico.'
+            : `${dados.removed_count} cópia(s) removida(s). ${dados.originais} foto(s) real(is) no mosaico.`,
       });
     } catch (err) {
       setResultadoDuplicar({
         erro: true,
-        texto: err instanceof Error ? err.message : 'Falha ao preencher o mosaico',
+        texto: err instanceof Error ? err.message : 'Falha ao mudar a duplicação',
       });
     } finally {
       setDuplicando(false);
@@ -888,17 +908,38 @@ export const IngestionPanel: React.FC = () => {
         </div>
 
         <p className="text-[10px] text-slate-400 leading-snug">
-          Se faltarem fotos para fechar o mosaico, clique no botão abaixo para reutilizar as fotos existentes e preencher 100% da grade.
+          Ligado, as fotos existentes são reutilizadas até fechar 100% da grade.
+          Desligado, o mosaico volta a mostrar só as fotos reais do evento — as
+          cópias somem da tela.
         </p>
 
-        <button
-          onClick={handleDuplicar}
-          disabled={duplicando}
-          className="w-full bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 disabled:from-slate-700 disabled:to-slate-700 disabled:text-slate-500 text-white font-bold text-xs py-2 rounded-lg transition shadow-md flex items-center justify-center gap-1.5 border border-emerald-400/40 disabled:border-slate-600 active:scale-95"
+        {/* Interruptor, não gatilho: ligar preenche, desligar desfaz. Sem o
+            caminho de volta, a única forma de tirar as cópias era resetar o
+            mosaico inteiro e perder as fotos reais junto. */}
+        <label
+          className={`flex items-center gap-2.5 w-full px-3 py-2 rounded-lg border transition cursor-pointer select-none ${
+            duplicando
+              ? 'bg-slate-800 border-slate-600 text-slate-500 cursor-wait'
+              : autoDuplicateToFill
+                ? 'bg-emerald-600/20 border-emerald-400/50 text-emerald-200 hover:bg-emerald-600/30'
+                : 'bg-slate-800/80 border-slate-600 text-slate-300 hover:bg-slate-700/80'
+          }`}
         >
-          <Check className="w-4 h-4 text-emerald-200" />
-          <span>{duplicando ? 'Preenchendo...' : '⚡ Preencher Todo o Mosaico (Duplicar Fotos)'}</span>
-        </button>
+          <input
+            type="checkbox"
+            checked={autoDuplicateToFill}
+            disabled={duplicando}
+            onChange={(e) => handleDuplicar(e.target.checked)}
+            className="w-4 h-4 accent-emerald-500 cursor-pointer disabled:cursor-wait"
+          />
+          <span className="text-xs font-bold">
+            {duplicando
+              ? autoDuplicateToFill
+                ? 'Removendo cópias...'
+                : 'Preenchendo...'
+              : 'Duplicar fotos para completar o mosaico'}
+          </span>
+        </label>
 
         {resultadoDuplicar && (
           <span className={`text-[10px] leading-snug ${resultadoDuplicar.erro ? 'text-rose-400' : 'text-emerald-400'}`}>

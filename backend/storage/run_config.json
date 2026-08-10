@@ -1076,7 +1076,7 @@
   ],
   "selectedBrushFilter": "none",
   "fillSequence": "brand_first",
-  "autoDuplicateToFill": false,
+  "autoDuplicateToFill": true,
   "duplicateDistLimit": 3,
   "colorStrictness": 1.0,
   "hotFolderDir": "storage/hot_folder",

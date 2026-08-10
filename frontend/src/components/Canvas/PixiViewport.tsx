@@ -444,6 +444,12 @@ export const PixiViewport: React.FC = () => {
           setRunState(data.payload?.run_state ?? 'idle');
         } else if (data.type === 'MOSAIC_RESET') {
           clearMosaic();
+        } else if (data.type === 'TILES_REMOVED') {
+          // Desligar a duplicação esvazia só as células das cópias; as fotos
+          // reais do evento continuam onde estão.
+          (data.payload?.cells ?? []).forEach((cell: { row: number; col: number }) => {
+            store.deleteTile(cell.row, cell.col);
+          });
         } else if (data.type === 'MOSAIC_OUTRO') {
           // Dispersa o que está na tela e só então zera o store, senão o efeito
           // de camada redesenharia os tiles por baixo da animação.

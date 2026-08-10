@@ -796,6 +796,39 @@ async def auto_fill_duplicates(fill_sequence: str | None = None):
         "ilegiveis": ilegiveis,
     }
 
+@app.post("/api/mosaic/remove-duplicates")
+async def remove_duplicates():
+    """
+    Desfaz o preenchimento por duplicatas: o mosaico volta a mostrar só as fotos
+    reais do evento. Toda cópia carrega o sufixo `_dup_` no photo_id, então dá
+    para distinguir sem guardar estado à parte.
+    """
+    duplicadas = [
+        (cell, photo_id)
+        for cell, photo_id in state.engine.placed_tiles.items()
+        if "_dup_" in str(photo_id)
+    ]
+
+    for (r, c), photo_id in duplicadas:
+        state.engine.remove_tile(r, c)
+        state.tile_urls.pop(photo_id, None)
+
+    if duplicadas:
+        # O telão não tem como saber quais células esvaziaram: manda a lista, e
+        # cada uma some da tela sem precisar recarregar o mosaico inteiro.
+        await broadcast_event(
+            "TILES_REMOVED",
+            {"cells": [{"row": r, "col": c} for (r, c), _ in duplicadas]},
+        )
+
+    restantes = len(state.engine.placed_tiles)
+    print(f"[AutoFill] {len(duplicadas)} duplicata(s) removida(s); {restantes} foto(s) real(is) no mosaico.")
+    return {
+        "status": "success",
+        "removed_count": len(duplicadas),
+        "originais": restantes,
+    }
+
 @app.post("/api/mosaic/outro")
 async def play_mosaic_outro():
     """
