@@ -112,6 +112,9 @@ DEFAULTS: dict[str, Any] = {
     # Preenchimento
     "fillSequence": "color_match",
     "autoDuplicateToFill": False,
+    # Ritmo da duplicação gradual: uma cópia a cada N segundos, cada uma com a
+    # mesma animação de foto nova.
+    "duplicateIntervalSeconds": 3.0,
     "duplicateDistLimit": settings.DEFAULT_DUPLICATE_DIST_LIMIT,
     "colorStrictness": settings.DEFAULT_COLOR_STRICTNESS,
     # Ingestão / assets
@@ -264,6 +267,7 @@ COERCERS: dict[str, Callable[[Any, Any], Any]] = {
     "selectedBrushFilter": _text,
     "fillSequence": _enum(FILL_SEQUENCES),
     "autoDuplicateToFill": _bool,
+    "duplicateIntervalSeconds": _float(0.2, 60.0),
     "duplicateDistLimit": _int(0, 50),
     "colorStrictness": _float(0.0, 5.0),
     "hotFolderDir": _text,

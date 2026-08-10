@@ -62,6 +62,7 @@ export const RUN_CONFIG_KEYS = [
   'selectedBrushFilter',
   'fillSequence',
   'autoDuplicateToFill',
+  'duplicateIntervalSeconds',
   'duplicateDistLimit',
   'colorStrictness',
   'hotFolderDir',
@@ -114,6 +115,8 @@ export interface MosaicStore {
   // Ordem de Preenchimento & Auto-Duplicação
   fillSequence: 'color_match' | 'top_to_bottom' | 'bottom_to_top' | 'center_out' | 'random' | 'brand_first';
   autoDuplicateToFill: boolean;
+  // Ritmo da duplicação gradual: uma cópia a cada N segundos.
+  duplicateIntervalSeconds: number;
 
   duplicateDistLimit: number;
   colorStrictness: number;
@@ -164,6 +167,7 @@ export interface MosaicStore {
   setSelectedBrushFilter: (filterId: string) => void;
   setFillSequence: (seq: 'color_match' | 'top_to_bottom' | 'bottom_to_top' | 'center_out' | 'random' | 'brand_first') => void;
   setAutoDuplicateToFill: (enabled: boolean) => void;
+  setDuplicateIntervalSeconds: (segundos: number) => void;
   setAutoPlaceMode: (enabled: boolean) => void;
   paintCell: (row: number, col: number, filterId?: string) => void;
   clearCellFilters: () => void;
@@ -249,6 +253,7 @@ export const useMosaicStore = create<MosaicStore>()(
 
       fillSequence: "color_match",
       autoDuplicateToFill: false,
+      duplicateIntervalSeconds: 3.0,
 
       duplicateDistLimit: 3,
       colorStrictness: 2.0,
@@ -335,6 +340,8 @@ export const useMosaicStore = create<MosaicStore>()(
       setSelectedBrushFilter: (selectedBrushFilter) => set({ selectedBrushFilter }),
       setFillSequence: (fillSequence) => set({ fillSequence }),
       setAutoDuplicateToFill: (enabled) => set({ autoDuplicateToFill: enabled, lastAppliedConfig: null }),
+      setDuplicateIntervalSeconds: (segundos) =>
+        set({ duplicateIntervalSeconds: segundos, lastAppliedConfig: null }),
       setAutoPlaceMode: (enabled) => set({ autoPlaceMode: enabled, lastAppliedConfig: null }),
 
       paintCell: (row, col, filterId) => {
@@ -439,6 +446,7 @@ export const useMosaicStore = create<MosaicStore>()(
         selectedBrushFilter: state.selectedBrushFilter,
         fillSequence: state.fillSequence,
         autoDuplicateToFill: state.autoDuplicateToFill,
+        duplicateIntervalSeconds: state.duplicateIntervalSeconds,
         duplicateDistLimit: state.duplicateDistLimit,
         colorStrictness: state.colorStrictness,
         targetBaseUrl: state.targetBaseUrl,

@@ -21,7 +21,9 @@ export const IngestionPanel: React.FC = () => {
     duplicateDistLimit,
     colorStrictness,
     autoDuplicateToFill,
+    duplicateIntervalSeconds,
     setAutoDuplicateToFill,
+    setDuplicateIntervalSeconds,
     markConfigApplied,
     hotFolderDir,
     targetBaseUrl,
@@ -57,6 +59,11 @@ export const IngestionPanel: React.FC = () => {
 
   const [duplicando, setDuplicando] = useState(false);
   const [resultadoDuplicar, setResultadoDuplicar] = useState<{ texto: string; erro: boolean } | null>(null);
+  const [intervaloDup, setIntervaloDup] = useState(duplicateIntervalSeconds);
+
+  // O servidor manda no ritmo enquanto o laço roda; o controle local só
+  // acompanha o que veio do INIT_STATE.
+  useEffect(() => setIntervaloDup(duplicateIntervalSeconds), [duplicateIntervalSeconds]);
 
   /**
    * Preenche as células vagas duplicando fotos já aprovadas.
@@ -65,36 +72,44 @@ export const IngestionPanel: React.FC = () => {
    * 500 passavam sem nenhum sinal na tela, e dava para clicar várias vezes
    * enquanto o servidor ainda preenchia.
    */
+  /**
+   * Liga/desliga a duplicação gradual.
+   *
+   * O backend é quem dita o ritmo: uma cópia a cada N segundos, cada uma com a
+   * animação de foto nova. Aqui só publicamos o interruptor — e, ao desligar,
+   * primeiro paramos o laço e só então mandamos limpar, senão ele repõe as
+   * cópias que acabaram de sair.
+   */
   const handleDuplicar = async (ligar: boolean) => {
     setDuplicando(true);
     setResultadoDuplicar(null);
     try {
-      const seq = useMosaicStore.getState().fillSequence;
-      const rota = ligar
-        ? `/api/mosaic/auto-fill-duplicates?fill_sequence=${seq}`
-        : '/api/mosaic/remove-duplicates';
-      const res = await fetch(rota, { method: 'POST' });
-      const dados = await res.json();
-      if (!res.ok) throw new Error(dados?.detail || 'Falha ao mudar a duplicação');
-
       // Publica direto, sem passar pelo "Aplicar": arrastaria junto qualquer
       // rascunho ainda não publicado das outras abas.
-      await fetch('/api/config', {
+      const res = await fetch('/api/config', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ autoDuplicateToFill: ligar }),
+        body: JSON.stringify({ autoDuplicateToFill: ligar, duplicateIntervalSeconds: intervaloDup }),
       });
+      if (!res.ok) throw new Error(await res.text());
       setAutoDuplicateToFill(ligar);
       markConfigApplied();
 
+      if (ligar) {
+        setResultadoDuplicar({
+          erro: false,
+          texto: `Duplicando aos poucos: uma cópia a cada ${intervaloDup}s, com animação de foto nova.`,
+        });
+        return;
+      }
+
+      const limpeza = await fetch('/api/mosaic/remove-duplicates', { method: 'POST' });
+      const dados = await limpeza.json();
+      if (!limpeza.ok) throw new Error(dados?.detail || 'Falha ao remover as cópias');
       setResultadoDuplicar({
         erro: false,
-        texto: ligar
-          ? dados.placed_count === 0
-            ? 'Nada a preencher — o mosaico já está completo.'
-            : `${dados.placed_count} célula(s) preenchida(s).` +
-              (dados.restantes ? ` ${dados.restantes} ainda vaga(s).` : ' Mosaico completo.')
-          : dados.removed_count === 0
+        texto:
+          dados.removed_count === 0
             ? 'Não havia cópia no mosaico.'
             : `${dados.removed_count} cópia(s) removida(s). ${dados.originais} foto(s) real(is) no mosaico.`,
       });
@@ -102,6 +117,51 @@ export const IngestionPanel: React.FC = () => {
       setResultadoDuplicar({
         erro: true,
         texto: err instanceof Error ? err.message : 'Falha ao mudar a duplicação',
+      });
+    } finally {
+      setDuplicando(false);
+    }
+  };
+
+  /** Publica o ritmo só ao soltar o slider: a cada pixel arrastado seria um
+   *  PUT, e cada PUT retransmite a config inteira para todos os telões. */
+  const aplicarIntervaloDup = async () => {
+    if (intervaloDup === duplicateIntervalSeconds) return;
+    setDuplicateIntervalSeconds(intervaloDup);
+    try {
+      await fetch('/api/config', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ duplicateIntervalSeconds: intervaloDup }),
+      });
+      markConfigApplied();
+    } catch {
+      setResultadoDuplicar({ erro: true, texto: 'Falha ao mudar o ritmo da duplicação' });
+    }
+  };
+
+  /** Preenche tudo de uma vez, sem animação de chegada. Para fechar o mosaico
+   *  na hora do vídeo ou da foto oficial, quando esperar não é opção. */
+  const handlePreencherAgora = async () => {
+    setDuplicando(true);
+    setResultadoDuplicar(null);
+    try {
+      const seq = useMosaicStore.getState().fillSequence;
+      const res = await fetch(`/api/mosaic/auto-fill-duplicates?fill_sequence=${seq}`, { method: 'POST' });
+      const dados = await res.json();
+      if (!res.ok) throw new Error(dados?.detail || 'Falha ao preencher');
+      setResultadoDuplicar({
+        erro: false,
+        texto:
+          dados.placed_count === 0
+            ? 'Nada a preencher — o mosaico já está completo.'
+            : `${dados.placed_count} célula(s) preenchida(s).` +
+              (dados.restantes ? ` ${dados.restantes} ainda vaga(s).` : ' Mosaico completo.'),
+      });
+    } catch (err) {
+      setResultadoDuplicar({
+        erro: true,
+        texto: err instanceof Error ? err.message : 'Falha ao preencher o mosaico',
       });
     } finally {
       setDuplicando(false);
@@ -908,9 +968,10 @@ export const IngestionPanel: React.FC = () => {
         </div>
 
         <p className="text-[10px] text-slate-400 leading-snug">
-          Ligado, as fotos existentes são reutilizadas até fechar 100% da grade.
-          Desligado, o mosaico volta a mostrar só as fotos reais do evento — as
-          cópias somem da tela.
+          Ligado, as fotos que já estão no mosaico vão sendo copiadas aos poucos,
+          em rodízio: cada cópia entra com a mesma animação de uma foto nova, até
+          fechar a grade. Quem chegar no meio do evento entra no rodízio na hora.
+          Desligado, as cópias somem e ficam só as fotos reais.
         </p>
 
         {/* Interruptor, não gatilho: ligar preenche, desligar desfaz. Sem o
@@ -936,10 +997,38 @@ export const IngestionPanel: React.FC = () => {
             {duplicando
               ? autoDuplicateToFill
                 ? 'Removendo cópias...'
-                : 'Preenchendo...'
-              : 'Duplicar fotos para completar o mosaico'}
+                : 'Ligando...'
+              : 'Duplicar as fotos do mosaico (gradual)'}
           </span>
         </label>
+
+        <label className="flex items-center justify-between gap-2 text-[10px] text-slate-400">
+          <span>Uma cópia a cada</span>
+          <div className="flex items-center gap-1.5 flex-1 max-w-[150px]">
+            <input
+              type="range"
+              min={0.5}
+              max={20}
+              step={0.5}
+              value={intervaloDup}
+              onChange={(e) => setIntervaloDup(Number(e.target.value))}
+              onMouseUp={() => aplicarIntervaloDup()}
+              onTouchEnd={() => aplicarIntervaloDup()}
+              className="flex-1 accent-emerald-500"
+            />
+            <span className="w-10 text-right font-mono text-emerald-300">{intervaloDup}s</span>
+          </div>
+        </label>
+
+        {/* Fechar na hora, sem esperar o rodízio: serve para a foto oficial e
+            para a gravação do vídeo, quando não dá para esperar. */}
+        <button
+          onClick={handlePreencherAgora}
+          disabled={duplicando}
+          className="w-full bg-slate-700/70 hover:bg-slate-600/70 disabled:bg-slate-800 disabled:text-slate-600 text-slate-200 font-semibold text-[11px] py-1.5 rounded-lg transition border border-slate-600 active:scale-95"
+        >
+          ⚡ Fechar o mosaico agora (sem animação)
+        </button>
 
         {resultadoDuplicar && (
           <span className={`text-[10px] leading-snug ${resultadoDuplicar.erro ? 'text-rose-400' : 'text-emerald-400'}`}>

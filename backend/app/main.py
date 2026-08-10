@@ -145,6 +145,116 @@ s3_watcher = S3Watcher(settings.HOT_FOLDER_DIR, poll_interval=5)
 
 main_loop = None
 
+# --- Duplicação gradual ---
+
+_DUP_TASK: asyncio.Task | None = None
+# Contador global de cópias. Garante id único mesmo depois de desligar e religar
+# o interruptor: repetir um id faria a cópia nova sobrescrever a antiga no motor.
+_DUP_CONTADOR = 0
+
+
+def _caminho_do_storage(url: str) -> Path | None:
+    """Arquivo em disco por trás de uma URL /storage/..."""
+    prefixo = "/storage/"
+    if not url or not url.startswith(prefixo):
+        return None
+    return settings.STORAGE_DIR / url[len(prefixo):]
+
+
+def _fotos_reais_no_mosaico() -> list[tuple[str, str]]:
+    """(photo_id, url) das fotos de verdade já pousadas, sem as cópias."""
+    reais: list[tuple[str, str]] = []
+    vistos: set[str] = set()
+    for photo_id in state.engine.placed_tiles.values():
+        chave = str(photo_id)
+        if "_dup_" in chave or chave in vistos:
+            continue
+        url = state.tile_urls.get(chave)
+        if url:
+            vistos.add(chave)
+            reais.append((chave, url))
+    return reais
+
+
+async def _laco_duplicacao():
+    """
+    Duplicação GRADUAL, enquanto o interruptor estiver ligado.
+
+    Cada cópia entra pelo mesmo TILE_PLACED de uma foto nova, então o telão a
+    anima igual: cartão no centro e voo até a célula. Despejar tudo de uma vez
+    enchia a grade num piscar e matava justamente o efeito que o telão existe
+    para dar.
+
+    A ordem é rodízio sobre as fotos reais: 50 fotos viram 100, depois 150, até
+    a grade fechar. Quem chega no meio do evento entra no rodízio na hora.
+    """
+    global _DUP_CONTADOR
+    indice = 0
+    print("[Duplicação] Ligada — copiando as fotos do mosaico aos poucos.")
+    try:
+        while state.config.get("autoDuplicateToFill", False):
+            intervalo = float(state.config.get("duplicateIntervalSeconds", 3.0))
+            await asyncio.sleep(max(0.2, intervalo))
+
+            if state.run_state != "running":
+                continue
+            if not state.engine.available_cells():
+                continue
+
+            fontes = _fotos_reais_no_mosaico()
+            if not fontes:
+                continue
+
+            photo_id_fonte, url = fontes[indice % len(fontes)]
+            indice += 1
+
+            caminho = _caminho_do_storage(url)
+            img_bgr = cv2.imread(str(caminho)) if caminho and caminho.exists() else None
+            if img_bgr is None:
+                print(f"[Duplicação] Arquivo ilegível para {photo_id_fonte}, pulando.")
+                continue
+
+            _DUP_CONTADOR += 1
+            novo_id = f"{photo_id_fonte}_dup_{_DUP_CONTADOR}"
+            r, c, score = state.engine.find_best_tile_position(
+                img_bgr,
+                novo_id,
+                duplicate_dist_limit=0,
+                strictness=state.color_strictness,
+                fill_sequence=state.fill_sequence,
+            )
+            if r is None:
+                continue
+
+            state.register_tile_url(novo_id, url)
+            await broadcast_event("TILE_PLACED", {
+                "photo_id": novo_id,
+                "url": url,
+                "row": r,
+                "col": c,
+                "target_x": c * state.engine.tile_w,
+                "target_y": r * state.engine.tile_h,
+                "score": score,
+            })
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        print(f"[Duplicação] Laço interrompido por erro: {exc}")
+    finally:
+        print("[Duplicação] Desligada.")
+
+
+def _sincronizar_duplicacao():
+    """Liga ou desliga o laço conforme `autoDuplicateToFill`."""
+    global _DUP_TASK
+    ativo = bool(state.config.get("autoDuplicateToFill", False))
+    rodando = _DUP_TASK is not None and not _DUP_TASK.done()
+    if ativo and not rodando:
+        _DUP_TASK = asyncio.create_task(_laco_duplicacao())
+    elif not ativo and rodando:
+        _DUP_TASK.cancel()
+
+
 @app.on_event("startup")
 async def startup_event():
     global main_loop
@@ -154,6 +264,9 @@ async def startup_event():
         pass
     hot_folder_watcher.start()
     s3_watcher.start()
+    # A config vem do disco: se o evento parou com a duplicação ligada, ela
+    # precisa voltar sozinha depois do restart.
+    _sincronizar_duplicacao()
 
 @app.on_event("shutdown")
 async def shutdown_event():
@@ -167,6 +280,9 @@ async def shutdown_event():
             pass
         if connection in ACTIVE_CONNECTIONS:
             ACTIVE_CONNECTIONS.remove(connection)
+
+    if _DUP_TASK and not _DUP_TASK.done():
+        _DUP_TASK.cancel()
 
     hot_folder_watcher.stop()
     s3_watcher.stop()
@@ -286,6 +402,7 @@ async def put_run_config(patch: dict):
     e retransmite para todos os telões conectados.
     """
     config = state.apply_config(patch)
+    _sincronizar_duplicacao()
     if "hotFolderDir" in patch:
         # O painel manda "storage/hot_folder" (relativo ao projeto). Resolver
         # contra BASE_DIR evita que o watcher vigie uma pasta vazia criada no
