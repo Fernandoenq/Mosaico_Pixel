@@ -53,6 +53,7 @@ export const IngestionPanel: React.FC = () => {
   const [exportError, setExportError] = useState<string>('');
 
   const [coberturaGrade, setCoberturaGrade] = useState(0.05);
+  const [distribuicaoGrade, setDistribuicaoGrade] = useState('espalhado');
   const [gerandoGrade, setGerandoGrade] = useState(false);
   const [resultadoGrade, setResultadoGrade] = useState<string>('');
 
@@ -64,7 +65,7 @@ export const IngestionPanel: React.FC = () => {
     setGerandoGrade(true);
     setResultadoGrade('');
     try {
-      const res = await fetch(`/api/mosaic/grade-da-marca?cobertura=${coberturaGrade}`, { method: 'POST' });
+      const res = await fetch(`/api/mosaic/grade-da-marca?cobertura=${coberturaGrade}&distribuicao=${distribuicaoGrade}`, { method: 'POST' });
       const dados = await res.json();
       if (!res.ok) throw new Error(dados?.detail || 'Falha ao encaixar a grade');
       setResultadoGrade(`${dados.celulas} células no formato do logo (de ${dados.total}).`);
@@ -615,6 +616,20 @@ export const IngestionPanel: React.FC = () => {
             <option value={0.05}>Completo (com os pontinhos)</option>
             <option value={0.15}>Equilibrado</option>
             <option value={0.3}>Só os losangos cheios</option>
+          </select>
+        </label>
+
+        {/* Define a ORDEM gravada na máscara, que a sequência "Desenho da Marca"
+            segue. É o que decide se o logo cresce por região ou por inteiro. */}
+        <label className="flex items-center justify-between text-[10px] text-slate-400">
+          <span>Como o logo enche</span>
+          <select
+            value={distribuicaoGrade}
+            onChange={(e) => setDistribuicaoGrade(e.target.value)}
+            className="bg-slate-900 border border-slate-700 rounded p-1 text-[10px] text-slate-200"
+          >
+            <option value="espalhado">Espalhado (logo inteiro desde o início)</option>
+            <option value="visibilidade">Por visibilidade (do lado mais denso)</option>
           </select>
         </label>
 

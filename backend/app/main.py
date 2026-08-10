@@ -866,8 +866,49 @@ def _limitar(valor: float, minimo: float, maximo: float) -> float:
     return max(minimo, min(maximo, valor))
 
 
+
+def _ordem_espalhada(celulas: list[tuple[int, int, float]], divisoes: int = 6) -> list:
+    """
+    Reordena as células para o logo crescer por inteiro em vez de por região.
+
+    Divide o desenho numa malha de regiões, ordena cada uma pela cobertura e
+    depois percorre em rodízio: a melhor da região 1, a melhor da região 2, e
+    assim por diante. Sem isso, ordenar só por cobertura concentra tudo onde a
+    arte é densa.
+    """
+    if not celulas:
+        return []
+
+    linhas = [c[0] for c in celulas]
+    colunas = [c[1] for c in celulas]
+    r0, r1 = min(linhas), max(linhas) + 1
+    c0, c1 = min(colunas), max(colunas) + 1
+    alt = max(1, (r1 - r0) / divisoes)
+    larg = max(1, (c1 - c0) / divisoes)
+
+    baldes: dict[tuple[int, int], list] = {}
+    for celula in celulas:
+        chave = (int((celula[0] - r0) / alt), int((celula[1] - c0) / larg))
+        baldes.setdefault(chave, []).append(celula)
+
+    for balde in baldes.values():
+        balde.sort(key=lambda c: -c[2])
+
+    # Regiões mais cheias primeiro, para o rodízio não começar pelas pontas.
+    ordem_regioes = sorted(baldes, key=lambda k: -len(baldes[k]))
+    saida = []
+    passo = 0
+    while len(saida) < len(celulas):
+        for chave in ordem_regioes:
+            balde = baldes[chave]
+            if passo < len(balde):
+                saida.append(balde[passo])
+        passo += 1
+    return saida
+
+
 @app.post("/api/mosaic/grade-da-marca")
-async def grade_da_marca(cobertura: float = 0.15):
+async def grade_da_marca(cobertura: float = 0.15, distribuicao: str = "visibilidade"):
     """
     Recorta a grade no formato do logo.
 
@@ -878,6 +919,14 @@ async def grade_da_marca(cobertura: float = 0.15):
 
     `cobertura` é a fração mínima do ladrilho sob a janela (0 a 1). Valores
     altos deixam só os losangos cheios; baixos incluem o halftone das pontas.
+
+    `distribuicao` define a ORDEM de preenchimento gravada na máscara:
+      - "visibilidade": as células mais cobertas primeiro. Cada foto aparece
+        inteira, mas o logo enche por região — na arte do HSBC as células
+        cheias estão todas do lado direito, então o mosaico cresce só ali.
+      - "espalhado": percorre as regiões do desenho em rodízio, pegando a
+        melhor célula de cada uma por vez. O logo inteiro se insinua desde as
+        primeiras fotos, ao custo de usar células menos cobertas mais cedo.
     """
     from app.services import video_marca
 
@@ -901,14 +950,14 @@ async def grade_da_marca(cobertura: float = 0.15):
         float(c.get("gridHeight", c.get("screenHeight", 1080))),
     )
 
-    # Ordena da célula mais coberta pela arte para a menos coberta. A ordem vira
-    # a prioridade de preenchimento em `brand_first`: as primeiras fotos caem
-    # nos losangos cheios, onde aparecem inteiras, e não nos pontinhos do
-    # halftone, onde mal se enxerga um pedaço.
-    validas = sorted(
-        (c for c in encontradas if c[2] >= limite),
-        key=lambda c: -c[2],
-    )
+    validas = [c for c in encontradas if c[2] >= limite]
+    if distribuicao == "espalhado":
+        validas = _ordem_espalhada(validas)
+    else:
+        # Da célula mais coberta pela arte para a menos coberta: as primeiras
+        # fotos caem nos losangos cheios, onde aparecem inteiras, e não nos
+        # pontinhos do halftone, onde mal se enxerga um pedaço.
+        validas = sorted(validas, key=lambda c: -c[2])
     celulas = [f"{r}_{col}" for r, col, _ in validas]
     if not celulas:
         raise HTTPException(
@@ -929,6 +978,7 @@ async def grade_da_marca(cobertura: float = 0.15):
         "celulas": len(celulas),
         "total": total,
         "cobertura_minima": limite,
+        "distribuicao": distribuicao,
     }
 
 
