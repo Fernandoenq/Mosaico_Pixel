@@ -328,7 +328,7 @@ async def ready():
     checagens = {
         "storage": settings.STORAGE_DIR.exists() and settings.TILES_DIR.exists(),
         "hot_folder": settings.HOT_FOLDER_DIR.exists(),
-        "watcher": hot_folder_watcher.observer is not None,
+        "watcher": hot_folder_watcher.ativo(),
         "engine": state.engine is not None,
     }
     pronto = all(checagens.values())
@@ -363,8 +363,8 @@ async def admin_health():
         "ingestao": {
             "fotos_processadas": tiles,
             "na_hot_folder": na_hot_folder,
-            "watcher_ativo": hot_folder_watcher.observer is not None,
-            "s3_ativo": s3_watcher.s3 is not None,
+            "watcher_ativo": hot_folder_watcher.ativo(),
+            "s3_ativo": s3_watcher.ativo(),
             "s3_chaves_importadas": len(s3_watcher.seen_keys),
         },
         "telao": {
@@ -1256,8 +1256,17 @@ async def limpeza_geral(bucket: bool = False, galeria: bool = True):
         s3_watcher.start()
 
     await broadcast_event("MOSAIC_RESET", {})
-    print(f"[Limpeza] disco={disco} bucket={resultado_bucket}")
-    return {"status": "success", "disco": disco, "bucket": resultado_bucket}
+    await broadcast_event("RUN_STATE_CHANGED", {"run_state": state.run_state})
+    print(f"[Limpeza] disco={disco} bucket={resultado_bucket} run_state={state.run_state}")
+    # O reset volta para idle, e em idle a foto é aprovada mas NÃO pousa. Sem
+    # dizer isso aqui, o operador limpa, solta as fotos e não entende por que a
+    # tela continua vazia — foi exatamente o que aconteceu no primeiro teste.
+    return {
+        "status": "success",
+        "disco": disco,
+        "bucket": resultado_bucket,
+        "run_state": state.run_state,
+    }
 
 
 @app.post("/api/mosaic/abrir-miolo-da-marca")

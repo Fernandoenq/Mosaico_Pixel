@@ -262,8 +262,13 @@ export const IngestionPanel: React.FC = () => {
             : `bucket: FALHOU — ${dados.bucket?.detalhe || dados.bucket?.falhas?.join(', ')}`,
         );
       }
-      setResultadoLimpeza({ erro: false, texto: `Limpo — ${partes.join(' · ')}.` });
+      const aviso =
+        dados.run_state && dados.run_state !== 'running'
+          ? ' O show voltou para PAUSADO — dê Play antes de soltar as fotos.'
+          : '';
+      setResultadoLimpeza({ erro: false, texto: `Limpo — ${partes.join(' · ')}.${aviso}` });
       useMosaicStore.getState().clearMosaic();
+      if (dados.run_state) useMosaicStore.getState().setRunState(dados.run_state);
     } catch (err) {
       setResultadoLimpeza({ erro: true, texto: err instanceof Error ? err.message : 'Falha na limpeza' });
     } finally {

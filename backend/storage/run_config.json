@@ -1230,7 +1230,7 @@
   ],
   "selectedBrushFilter": "none",
   "fillSequence": "top_to_bottom",
-  "autoDuplicateToFill": true,
+  "autoDuplicateToFill": false,
   "duplicateIntervalSeconds": 4.5,
   "duplicateDistLimit": 3,
   "colorStrictness": 1.0,

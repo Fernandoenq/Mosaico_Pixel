@@ -46,13 +46,31 @@ class S3Watcher:
             print("[S3Watcher] Missing S3 credentials in .env. S3 Watcher disabled.")
             self.s3 = None
 
+    def ativo(self) -> bool:
+        """Rodando de verdade: thread viva e sem ordem de parada pendente."""
+        return (
+            self.s3 is not None
+            and self._thread is not None
+            and self._thread.is_alive()
+            and not self._stop_event.is_set()
+        )
+
     def start(self):
         if not self.s3:
             return
-            
-        if self._thread is not None and self._thread.is_alive():
+
+        if self.ativo():
             return
-            
+
+        # Uma thread VIVA com o stop_event ligado é uma thread agonizante: ela
+        # está no meio da espera e vai morrer na próxima volta. Ligar por cima
+        # dela deixava o watcher morto em silêncio — `start` via "is_alive" e
+        # voltava sem limpar o evento, e segundos depois a thread saía. Foi
+        # exatamente o que aconteceu depois da limpeza geral (stop seguido de
+        # start): o bucket parou de ser lido e ninguém percebeu.
+        if self._thread is not None and self._thread.is_alive():
+            self._thread.join(timeout=self.poll_interval + 2)
+
         self._stop_event.clear()
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
@@ -85,7 +103,9 @@ class S3Watcher:
             except Exception as e:
                 print(f"[S3Watcher] Polling error: {e}")
                 
-            time.sleep(self.poll_interval)
+            # `wait` em vez de `sleep`: com sleep a parada só era notada no fim
+            # do ciclo, o join de 3s estourava e a thread ficava agonizando.
+            self._stop_event.wait(self.poll_interval)
 
     def esquecer_tudo(self):
         """

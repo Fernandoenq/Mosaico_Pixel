@@ -133,6 +133,20 @@ class HotFolderWatcher:
             self._rescan_thread.join(timeout=2)
             self._rescan_thread = None
 
+    def ativo(self) -> bool:
+        """
+        Vigiando de verdade.
+
+        `observer is not None` não serve como resposta: o objeto continua no
+        lugar depois que a thread do watchdog morre, e o health passava a jurar
+        que a ingestão estava de pé com a pasta sem ninguém olhando.
+        """
+        return (
+            self.observer is not None
+            and self.observer.is_alive()
+            and not self._stop_event.is_set()
+        )
+
     def update_dir(self, new_dir: Path):
         new_dir = Path(new_dir)
         if new_dir == self.watch_dir and self.observer is not None:
