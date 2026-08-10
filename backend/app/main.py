@@ -270,7 +270,13 @@ async def websocket_endpoint(websocket: WebSocket):
 
 @app.get("/api/config")
 async def get_run_config():
-    return {"config": state.config, "run_state": state.run_state}
+    return {
+        "config": state.config,
+        "run_state": state.run_state,
+        # Sinaliza ao painel que o recorte do logo não corresponde mais à
+        # geometria atual da grade e precisa ser refeito.
+        "mask_stale": state.mask_stale,
+    }
 
 @app.put("/api/config")
 async def put_run_config(patch: dict):
@@ -959,6 +965,7 @@ async def info_video_marca():
         "temOverlay": overlay is not None,
         "fotos": len(fotos),
         "celulas": celulas,
+        "maskStale": state.mask_stale,
     }
 
 

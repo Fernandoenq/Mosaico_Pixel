@@ -24,6 +24,8 @@ class MosaicState:
         # Enquanto nenhuma imagem base for enviada, o alvo é um placeholder do
         # tamanho do telão — precisa ser regerado quando a resolução muda.
         self.has_target_image = False
+        # Máscara do logo desatualizada em relação à geometria atual.
+        self.mask_stale = False
 
         self.target_image_bgr = self._build_placeholder_target()
         # As células do contorno personalizado precisam vir JUNTO na construção.
@@ -151,6 +153,21 @@ class MosaicState:
             orphans = self.engine.purge_tiles_outside_container()
             if orphans:
                 print(f"[Config] {len(orphans)} ladrilho(s) fora do novo contorno foram liberados.")
+
+        # A máscara do logo é um recorte calculado EM CIMA de uma geometria
+        # específica. Mexer na grade ou no enquadramento sem recalcular deixa
+        # cada célula apontando para outro pedaço da arte, e o mosaico para de
+        # casar com o desenho. Aqui só sinalizamos — quem recalcula é o painel,
+        # via POST /api/mosaic/grade-da-marca.
+        geometria = {"rows", "cols", "gridOffsetX", "gridOffsetY", "gridWidth", "gridHeight"}
+        if (geometria & changed) and self.container_shape == "custom_mask" and self.custom_mask_cells:
+            self.mask_stale = True
+            print(
+                "[Config] AVISO: a geometria mudou e o contorno é o do logo. "
+                "A máscara está defasada — reencaixe em 'Formato do Logo'."
+            )
+        elif "customMaskCells" in changed:
+            self.mask_stale = False
 
         return self.config
 
