@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { useMosaicStore } from '../../store/mosaicStore';
 import { Palette, Paintbrush, Sparkles, Trash2, Clock, Check } from 'lucide-react';
 
@@ -33,6 +33,47 @@ export const FilterEditorPanel: React.FC = () => {
   } = useMosaicStore();
 
   const paintedCount = Object.keys(cellFilters).length;
+
+  const [isApplyingHSBC, setIsApplyingHSBC] = useState(false);
+
+  const handleApplyHSBC = async () => {
+    setIsApplyingHSBC(true);
+    try {
+      const res = await fetch('/api/hsbc/apply-bowtie', { method: 'POST' });
+      if (!res.ok) {
+        const err = await res.json();
+        alert(`Erro ao aplicar HSBC: ${err.detail || err.message}`);
+      }
+    } catch (err) {
+      console.error(err);
+      alert('Erro na conexão com o servidor.');
+    } finally {
+      setIsApplyingHSBC(false);
+    }
+  };
+
+  const handleRestoreDefault = async () => {
+    // Limpa a pintura no frontend
+    clearCellFilters();
+    
+    // Reseta o estado local
+    useMosaicStore.getState().setGridContainerShape('rectangle');
+    
+    // Sincroniza com o backend limpando a logo HSBC
+    try {
+      await fetch('/api/config', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          cellFilters: {}, 
+          customMaskCells: [],
+          gridContainerShape: 'rectangle'
+        })
+      });
+    } catch (err) {
+      console.error(err);
+    }
+  };
 
   return (
     <div className="flex flex-col gap-5 p-4 bg-slate-900 border-r border-slate-800 text-slate-100 w-80 h-screen max-h-screen overflow-y-auto pr-2 font-sans select-none">
@@ -124,6 +165,24 @@ export const FilterEditorPanel: React.FC = () => {
             <span>Limpar Todos os Filtros ({paintedCount})</span>
           </button>
         )}
+
+        <hr className="border-slate-700/50 my-1" />
+        <div className="flex flex-col gap-2">
+          <button
+            onClick={handleApplyHSBC}
+            disabled={isApplyingHSBC}
+            className="bg-red-600 hover:bg-red-500 text-white text-xs font-bold py-2 rounded-lg transition flex items-center justify-center gap-1.5 shadow-md disabled:opacity-50"
+          >
+            <span>{isApplyingHSBC ? 'Aplicando...' : '♦ Aplicar Logo HSBC (Gravata-Borboleta)'}</span>
+          </button>
+          
+          <button
+            onClick={handleRestoreDefault}
+            className="bg-slate-700 hover:bg-slate-600 text-slate-300 text-xs font-semibold py-1.5 rounded-lg transition flex items-center justify-center gap-1.5 shadow-sm border border-slate-600"
+          >
+            <span>🔲 Voltar para Mosaico Quadrado Normal</span>
+          </button>
+        </div>
       </div>
 
       {/* 3. Duração do Preview Central no Centro da Tela (Camada 2) */}

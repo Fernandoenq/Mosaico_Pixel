@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useMosaicStore } from '../../store/mosaicStore';
 import { Monitor, Grid, FolderOpen, Image as ImageIcon, Upload, Check, Sliders, Move, Save } from 'lucide-react';
 
@@ -44,6 +44,40 @@ export const IngestionPanel: React.FC = () => {
   const [brandImages, setBrandImages] = useState<string[]>([]);
   const [uploadingTarget, setUploadingTarget] = useState(false);
   const [generatingPhotos, setGeneratingPhotos] = useState(false);
+  
+  // Video Export State
+  const [exportState, setExportState] = useState<'idle' | 'exporting' | 'completed' | 'error'>('idle');
+  const [exportProgress, setExportProgress] = useState(0);
+  const [exportId, setExportId] = useState<string | null>(null);
+  const [exportError, setExportError] = useState<string>('');
+
+  // Ajustes do vídeo no modelo da marca. Os defaults são os valores aprovados
+  // pelo cliente — mexer aqui só muda a exportação, nunca o telão ao vivo.
+  const RESOLUCOES = [
+    { rotulo: 'Rápida — 1152×688', largura: 1152, altura: 688 },
+    { rotulo: 'Cheia — 1920×1147', largura: 1920, altura: 1147 },
+    { rotulo: 'Telão — 2304×1377', largura: 2304, altura: 1377 },
+  ];
+  const [videoRes, setVideoRes] = useState(0);
+  const [videoFps, setVideoFps] = useState(30);
+  const [videoIntervalo, setVideoIntervalo] = useState(0.12);
+  const [videoHold, setVideoHold] = useState(0.5);
+  const [videoVoo, setVideoVoo] = useState(0.6);
+  const [videoCor, setVideoCor] = useState('#e21c1c');
+  const [videoOpcoesAbertas, setVideoOpcoesAbertas] = useState(false);
+  const [videoFotos, setVideoFotos] = useState<number | null>(null);
+
+  // Quantas fotos já existem — serve para estimar a duração antes de gerar.
+  useEffect(() => {
+    fetch('/api/export/video-marca/info')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => d && setVideoFotos(d.celulas ?? null))
+      .catch(() => {});
+  }, []);
+
+  const duracaoEstimada = videoFotos
+    ? (videoFotos * videoIntervalo + videoHold + videoVoo + 3).toFixed(0)
+    : null;
 
   const handleGalleryTestPhotos = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!e.target.files?.length) return;
@@ -172,6 +206,57 @@ export const IngestionPanel: React.FC = () => {
     const data = await res.json();
     if (data.item) {
       setBrandImages((prev) => [...prev, data.item.url]);
+    }
+  };
+
+  const handleExportVideo = async (endpoint = '/api/export/video', opcoes?: Record<string, unknown>) => {
+    try {
+      setExportState('exporting');
+      setExportProgress(0);
+      setExportError('');
+
+      const res = await fetch(endpoint, {
+        method: 'POST',
+        ...(opcoes
+          ? { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(opcoes) }
+          : {}),
+      });
+      if (!res.ok) {
+        // O backend explica o que falta (overlay ausente, sem fotos...).
+        const detalhe = await res.json().catch(() => null);
+        throw new Error(detalhe?.detail || 'Falha ao iniciar exportação');
+      }
+
+      const data = await res.json();
+      const id = data.export_id;
+      setExportId(id);
+      
+      const interval = setInterval(async () => {
+        try {
+          const statusRes = await fetch(`/api/export/video/status/${id}`);
+          if (statusRes.ok) {
+            const statusData = await statusRes.json();
+            // O backend responde 'done'; aceitar só 'completed' deixava a barra
+            // travada em 99% com o vídeo já pronto no disco.
+            if (statusData.status === 'done' || statusData.status === 'completed') {
+              setExportState('completed');
+              setExportProgress(100);
+              clearInterval(interval);
+            } else if (statusData.status === 'error') {
+              setExportState('error');
+              setExportError(statusData.error || 'Erro desconhecido');
+              clearInterval(interval);
+            } else {
+              setExportProgress(statusData.progress || 0);
+            }
+          }
+        } catch (e) {
+          // Keep polling unless severe error
+        }
+      }, 2000);
+    } catch (e: any) {
+      setExportState('error');
+      setExportError(e.message);
     }
   };
 
@@ -703,6 +788,27 @@ export const IngestionPanel: React.FC = () => {
           <span className="w-2 h-2 bg-emerald-500 rounded-full animate-ping" />
           Watcher Ativo (Monitorando diretório)
         </span>
+        
+        <div className="flex items-center gap-2 mt-2 pt-2 border-t border-slate-700/50">
+          <input
+            type="checkbox"
+            id="autoPlaceMode"
+            checked={useMosaicStore.getState().autoPlaceMode}
+            onChange={(e) => {
+              const val = e.target.checked;
+              useMosaicStore.getState().setAutoPlaceMode(val);
+              fetch('/api/config', {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ autoPlaceMode: val })
+              });
+            }}
+            className="w-4 h-4 accent-emerald-500 bg-slate-800 border-slate-600 rounded cursor-pointer"
+          />
+          <label htmlFor="autoPlaceMode" className="text-[11px] text-emerald-300 font-bold cursor-pointer">
+            Auto-Preenchimento (Aprovar e Enviar para Tela 100% Automático)
+          </label>
+        </div>
       </div>
 
       {/* 7. Brand / Fallback Images */}
@@ -761,6 +867,185 @@ export const IngestionPanel: React.FC = () => {
           )}
         </label>
       </div>
+
+      {/* 9. Exportação de Vídeo MP4 */}
+      <div className="flex flex-col gap-2 bg-slate-800/80 p-3 rounded-lg border border-slate-700/80 shadow-md mb-6">
+        <div className="flex items-center gap-1.5 text-xs font-bold text-cyan-300 border-b border-slate-700 pb-1 mb-1">
+          <Monitor className="w-3.5 h-3.5" /> Exportação MP4 (Subdivisão)
+        </div>
+        
+        {exportState === 'idle' && (
+          <div className="flex flex-col gap-2">
+            {/* Modelo aprovado pelo cliente: a foto surge colorida no centro,
+                voa e pousa tingida na cor da marca, desenhando o logo. */}
+            <button
+              onClick={() =>
+                handleExportVideo('/api/export/video-marca', {
+                  largura: RESOLUCOES[videoRes].largura,
+                  altura: RESOLUCOES[videoRes].altura,
+                  fps: videoFps,
+                  intervaloEntreFotos: videoIntervalo,
+                  holdCentral: videoHold,
+                  duracaoVoo: videoVoo,
+                  corMarca: videoCor,
+                })
+              }
+              className="w-full bg-red-600 hover:bg-red-500 text-white text-xs font-bold py-2 rounded-md transition-colors"
+            >
+              🎬 Exportar no Modelo da Marca
+            </button>
+            <span className="text-[10px] text-slate-500 leading-snug">
+              Usa o overlay da Camada 4 e todas as fotos já recebidas — não precisa
+              do mosaico montado na tela.
+              {videoFotos !== null && duracaoEstimada && (
+                <> {videoFotos} células · vídeo de ~<span className="text-cyan-300 font-mono">{duracaoEstimada}s</span>.</>
+              )}
+            </span>
+
+            <button
+              onClick={() => setVideoOpcoesAbertas((v) => !v)}
+              className="text-[10px] text-slate-400 hover:text-cyan-300 text-left transition"
+            >
+              {videoOpcoesAbertas ? '▾' : '▸'} Ajustes do vídeo
+            </button>
+
+            {videoOpcoesAbertas && (
+              <div className="flex flex-col gap-2.5 bg-slate-900/70 p-2.5 rounded border border-slate-700/60">
+                <label className="flex flex-col gap-1">
+                  <span className="text-[10px] text-slate-400">Resolução</span>
+                  <select
+                    value={videoRes}
+                    onChange={(e) => setVideoRes(parseInt(e.target.value, 10))}
+                    className="bg-slate-900 border border-slate-700 rounded p-1 text-[11px] text-slate-200"
+                  >
+                    {RESOLUCOES.map((r, i) => (
+                      <option key={r.rotulo} value={i}>{r.rotulo}</option>
+                    ))}
+                  </select>
+                  <span className="text-[9px] text-slate-500">
+                    Quanto maior, mais demora para gerar.
+                  </span>
+                </label>
+
+                <label className="flex flex-col gap-1">
+                  <span className="text-[10px] text-slate-400">Quadros por segundo</span>
+                  <select
+                    value={videoFps}
+                    onChange={(e) => setVideoFps(parseInt(e.target.value, 10))}
+                    className="bg-slate-900 border border-slate-700 rounded p-1 text-[11px] text-slate-200"
+                  >
+                    <option value={24}>24 fps (cinema)</option>
+                    <option value={30}>30 fps (padrão)</option>
+                    <option value={60}>60 fps (suave)</option>
+                  </select>
+                </label>
+
+                {([
+                  ['Intervalo entre fotos', videoIntervalo, setVideoIntervalo, 0.02, 1, 0.01],
+                  ['Parada no centro', videoHold, setVideoHold, 0, 3, 0.1],
+                  ['Duração do voo', videoVoo, setVideoVoo, 0.1, 2, 0.1],
+                ] as const).map(([rotulo, valor, setter, min, max, step]) => (
+                  <div key={rotulo} className="flex flex-col gap-1">
+                    <div className="flex justify-between text-[10px] text-slate-400">
+                      <span>{rotulo}</span>
+                      <span className="font-mono text-cyan-300">{valor.toFixed(2)}s</span>
+                    </div>
+                    <input
+                      type="range"
+                      min={min}
+                      max={max}
+                      step={step}
+                      value={valor}
+                      onChange={(e) => setter(parseFloat(e.target.value))}
+                      className="w-full h-1 bg-slate-700 rounded appearance-none cursor-pointer accent-cyan-400"
+                    />
+                  </div>
+                ))}
+
+                <label className="flex items-center justify-between gap-2">
+                  <span className="text-[10px] text-slate-400">Cor da marca</span>
+                  <div className="flex items-center gap-1.5">
+                    <span className="font-mono text-[10px] text-slate-400">{videoCor}</span>
+                    <input
+                      type="color"
+                      value={videoCor}
+                      onChange={(e) => setVideoCor(e.target.value)}
+                      className="w-8 h-6 bg-transparent border border-slate-700 rounded cursor-pointer"
+                    />
+                  </div>
+                </label>
+                <span className="text-[9px] text-slate-500 leading-snug">
+                  As fotos pousadas são tingidas nessa cor para desenhar o logo.
+                </span>
+
+                <button
+                  onClick={() => {
+                    setVideoRes(0); setVideoFps(30); setVideoIntervalo(0.12);
+                    setVideoHold(0.5); setVideoVoo(0.6); setVideoCor('#e21c1c');
+                  }}
+                  className="text-[10px] text-slate-500 hover:text-cyan-300 transition"
+                >
+                  Restaurar valores aprovados
+                </button>
+              </div>
+            )}
+
+            <button
+              onClick={() => handleExportVideo('/api/export/video')}
+              className="w-full bg-slate-700 hover:bg-slate-600 text-slate-200 text-xs font-semibold py-2 rounded-md transition-colors"
+            >
+              Exportar Mosaico Atual (Subdivisão)
+            </button>
+          </div>
+        )}
+        
+        {exportState === 'exporting' && (
+          <div className="flex flex-col gap-1">
+            <div className="flex justify-between text-[10px] text-cyan-200">
+              <span>Gerando frames...</span>
+              <span>{exportProgress}%</span>
+            </div>
+            <div className="w-full bg-slate-700 rounded-full h-1.5">
+              <div 
+                className="bg-cyan-400 h-1.5 rounded-full transition-all duration-300"
+                style={{ width: `${exportProgress}%` }}
+              ></div>
+            </div>
+          </div>
+        )}
+        
+        {exportState === 'completed' && (
+          <div className="flex flex-col gap-2">
+            <p className="text-[10px] text-emerald-400 text-center">Exportação Concluída!</p>
+            <a 
+              href={`/api/export/video/download/${exportId}`}
+              download
+              className="block w-full text-center bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold py-2 rounded-md transition-colors"
+            >
+              ⬇️ Baixar MP4
+            </a>
+            <button 
+              onClick={() => setExportState('idle')}
+              className="text-[10px] text-slate-400 hover:text-white"
+            >
+              Exportar novamente
+            </button>
+          </div>
+        )}
+        
+        {exportState === 'error' && (
+          <div className="flex flex-col gap-2">
+            <p className="text-[10px] text-red-400">Erro: {exportError}</p>
+            <button 
+              onClick={() => setExportState('idle')}
+              className="w-full bg-slate-700 hover:bg-slate-600 text-white text-[10px] py-1 rounded-md"
+            >
+              Tentar Novamente
+            </button>
+          </div>
+        )}
+      </div>
+
     </div>
   );
 };

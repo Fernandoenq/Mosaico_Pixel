@@ -19,6 +19,10 @@ from typing import Any, Callable
 from app.core.config import settings
 
 CONFIG_PATH: Path = settings.STORAGE_DIR / "run_config.json"
+# Separado do run_config.json: o transporte muda numa cadência diferente da
+# config e o painel não deve conseguir sobrescrevê-lo por um PUT /api/config.
+RUN_STATE_PATH: Path = settings.STORAGE_DIR / "run_state.json"
+RUN_STATES = ("idle", "running", "paused")
 
 GRID_SHAPES = {"square", "diamond", "hexagon", "circle"}
 CONTAINER_SHAPES = {
@@ -28,6 +32,7 @@ CONTAINER_SHAPES = {
     "circle_mask",
     "hexagon_halftone",
     "auto_color_mask",
+    "custom_mask",
 }
 # `explode_outro` saiu daqui de propósito: dispersar o mosaico é ação de
 # encerramento (POST /api/mosaic/outro), não um preset de entrada por foto.
@@ -85,9 +90,21 @@ DEFAULTS: dict[str, Any] = {
     "animationPreset": "hsbc_cascade",
     "animationDuration": 0.8,
     "animationEase": "auto",
-    "centralPreviewDuration": 0.8,
-    # Pintura de áreas
+    # Tempo em que a foto fica parada no centro do telão. É o momento em que a
+    # pessoa se reconhece; abaixo de ~2s ela não consegue apontar para a tela.
+    "centralPreviewDuration": 10.0,
+    # Lado do cartao de preview como fracao da altura do telao. Vive na
+    # config (e nao no codigo) para o operador ajustar no painel e ver o
+    # efeito na hora, sem recarregar o telao.
+    "previewCardScale": 1.00,
+    # Modo ocioso: sem foto nova por um tempo, o telao volta a destacar
+    # fotos que ja estao no mosaico, para a tela nunca ficar parada.
+    "idleReplayEnabled": True,
+    "idleReplayDelay": 20.0,
+    "idleReplayInterval": 5.0,
+    # Pintura de áreas e máscara
     "cellFilters": {},
+    "customMaskCells": [],
     "selectedBrushFilter": "red",
     # Preenchimento
     "fillSequence": "color_match",
@@ -97,6 +114,10 @@ DEFAULTS: dict[str, Any] = {
     # Ingestão / assets
     "hotFolderDir": "storage/hot_folder",
     "targetBaseUrl": None,
+    # PNG com transparencia desenhado por cima de tudo (Camada 4). E o
+    # recorte da marca: onde ele e transparente, o mosaico aparece.
+    "foregroundUrl": None,
+    "autoPlaceMode": True,
     # Camadas
     "layers": DEFAULT_LAYERS,
 }
@@ -207,7 +228,11 @@ COERCERS: dict[str, Callable[[Any, Any], Any]] = {
     "animationPreset": _enum(ANIMATION_PRESETS),
     "animationDuration": _float(0.1, 10.0),
     "animationEase": _enum(ANIMATION_EASES),
-    "centralPreviewDuration": _float(0.0, 10.0),
+    "centralPreviewDuration": _float(0.0, 20.0),
+    "previewCardScale": _float(0.20, 1.00),
+    "idleReplayEnabled": _bool,
+    "idleReplayDelay": _float(3.0, 600.0),
+    "idleReplayInterval": _float(0.0, 300.0),
     "cellFilters": _cell_filters,
     "selectedBrushFilter": _text,
     "fillSequence": _enum(FILL_SEQUENCES),
@@ -216,6 +241,8 @@ COERCERS: dict[str, Callable[[Any, Any], Any]] = {
     "colorStrictness": _float(0.0, 5.0),
     "hotFolderDir": _text,
     "targetBaseUrl": _nullable_text,
+    "foregroundUrl": _nullable_text,
+    "autoPlaceMode": _bool,
     "layers": _layers,
 }
 
@@ -256,19 +283,43 @@ def load_config() -> dict[str, Any]:
     return merge_patch(config, stored if isinstance(stored, dict) else {})
 
 
-def save_config(config: dict[str, Any]) -> None:
-    """Escrita atômica: grava em temporário e substitui, evitando JSON truncado."""
-    CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+def _write_atomic(path: Path, payload: Any, label: str) -> None:
+    """Grava em temporário e substitui, evitando JSON truncado por queda no meio."""
+    path.parent.mkdir(parents=True, exist_ok=True)
     handle = tempfile.NamedTemporaryFile(
-        "w", encoding="utf-8", dir=str(CONFIG_PATH.parent), prefix=".run_config-", suffix=".tmp", delete=False
+        "w", encoding="utf-8", dir=str(path.parent), prefix=f".{path.stem}-", suffix=".tmp", delete=False
     )
     try:
         with handle:
-            json.dump(config, handle, ensure_ascii=False, indent=2)
-        os.replace(handle.name, CONFIG_PATH)
+            json.dump(payload, handle, ensure_ascii=False, indent=2)
+        os.replace(handle.name, path)
     except OSError as exc:
-        print(f"[RunConfig] Falha ao salvar config: {exc}")
+        print(f"[RunConfig] Falha ao salvar {label}: {exc}")
         try:
             os.unlink(handle.name)
         except OSError:
             pass
+
+
+def save_config(config: dict[str, Any]) -> None:
+    _write_atomic(CONFIG_PATH, config, "config")
+
+
+def load_run_state() -> str:
+    """Transporte persistido. Qualquer conteúdo estranho cai em 'idle'."""
+    if not RUN_STATE_PATH.exists():
+        return "idle"
+    try:
+        with RUN_STATE_PATH.open("r", encoding="utf-8") as handle:
+            stored = json.load(handle)
+    except (OSError, json.JSONDecodeError) as exc:
+        print(f"[RunConfig] Falha ao ler {RUN_STATE_PATH}, assumindo idle: {exc}")
+        return "idle"
+    value = stored.get("runState") if isinstance(stored, dict) else None
+    return value if value in RUN_STATES else "idle"
+
+
+def save_run_state(value: str) -> None:
+    if value not in RUN_STATES:
+        return
+    _write_atomic(RUN_STATE_PATH, {"runState": value}, "run_state")

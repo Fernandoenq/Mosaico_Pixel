@@ -59,12 +59,14 @@ export const PixiViewport: React.FC = () => {
     animationEase,
     centralPreviewDuration,
     cellFilters,
+    customMaskCells,
     brushModeActive,
     selectedBrushFilter,
     paintCell,
     placedTiles,
     layers,
     targetBaseUrl,
+    foregroundUrl,
     setTargetBaseUrl,
     setGridBounds,
     setContextMenu,
@@ -111,6 +113,12 @@ export const PixiViewport: React.FC = () => {
   const layer4Logo = useRef<PIXI.Container | null>(null);
   const layer5Text = useRef<PIXI.Container | null>(null);
 
+  const animationQueue = useRef<any[]>([]);
+  const isAnimating = useRef(false);
+
+  // Teto por foto antes de destravar a fila à força.
+  const ANIMATION_TIMEOUT_MS = 15000;
+
   const drawBaseImage = () => {
     const targetUrl = useMosaicStore.getState().targetBaseUrl;
     if (!layer0Base.current || !targetUrl) return;
@@ -123,6 +131,23 @@ export const PixiViewport: React.FC = () => {
     sprite.width = screenWidth;
     sprite.height = screenHeight;
     baseContainer.addChild(sprite);
+  };
+
+  const drawForegroundLogo = () => {
+    const fgUrl = useMosaicStore.getState().foregroundUrl;
+    if (!layer4Logo.current) return;
+    
+    const logoContainer = layer4Logo.current;
+    logoContainer.removeChildren();
+
+    if (fgUrl) {
+      const texture = PIXI.Texture.from(fgUrl);
+      const sprite = new PIXI.Sprite(texture);
+      const { screenWidth, screenHeight } = useMosaicStore.getState();
+      sprite.width = screenWidth;
+      sprite.height = screenHeight;
+      logoContainer.addChild(sprite);
+    }
   };
 
   useEffect(() => {
@@ -157,7 +182,7 @@ export const PixiViewport: React.FC = () => {
 
     c0.zIndex = 0;
     c1.zIndex = 1;
-    c2.zIndex = 2;
+    c2.zIndex = 99; // Camada 2: Foto voadora (preview central) desenhada por cima de TUDO!
     g3.zIndex = 3;
     c4.zIndex = 4;
     c5.zIndex = 5;
@@ -177,11 +202,20 @@ export const PixiViewport: React.FC = () => {
     layer5Text.current = c5;
 
     drawBaseImage();
+    drawForegroundLogo();
     drawGrid();
 
     return () => {
       app.destroy(true, { children: true });
       appRef.current = null;
+      // As refs precisam cair junto: apontando para containers já destruídos,
+      // a animação rodaria sobre objetos mortos e a foto sumiria sem preview.
+      layer0Base.current = null;
+      layer1Landed.current = null;
+      layer2Flying.current = null;
+      layer3Grid.current = null;
+      layer4Logo.current = null;
+      layer5Text.current = null;
     };
   }, [screenWidth, screenHeight]);
 
@@ -199,6 +233,176 @@ export const PixiViewport: React.FC = () => {
     let reconnectTimer: number | undefined;
     let attempt = 0;
     let unmounted = false;
+
+    /**
+     * Anima UMA foto e resolve quando ela pousou. Todo caminho de saída pousa o
+     * tile — uma textura que não carrega não pode deixar a célula em branco.
+     */
+    const animateOne = async (payload: any) => {
+      const store = useMosaicStore.getState();
+      const flying = layer2Flying.current;
+      const landed = layer1Landed.current;
+
+      if (!flying || !landed) {
+        console.warn('[Mosaico] camadas ausentes — foto pousou SEM preview:', payload.photo_id);
+        placeTile(payload);
+        return;
+      }
+
+      let texture: PIXI.Texture | null = null;
+      try {
+        texture = await PIXI.Assets.load(payload.url);
+      } catch {
+        // `Texture.from` também lança em URL inválida — antes essa exceção
+        // escapava da async function e a trava nunca era liberada.
+        try {
+          texture = PIXI.Texture.from(payload.url);
+        } catch {
+          texture = null;
+        }
+      }
+
+      if (unmounted) return;
+
+      if (!texture) {
+        console.warn(`[Mosaico] Textura não carregou: ${payload.url}`);
+        placeTile(payload);
+        return;
+      }
+
+      const gw = store.gridWidth > 0 ? store.gridWidth : store.screenWidth;
+      const gh = store.gridHeight > 0 ? store.gridHeight : store.screenHeight;
+      const tileW = gw / store.cols;
+      const tileH = gh / store.rows;
+
+      const targetX = store.gridOffsetX + payload.col * tileW;
+      const targetY = store.gridOffsetY + payload.row * tileH;
+      const cx = targetX + tileW / 2;
+      const cy = targetY + tileH / 2;
+
+      const cellFilter = store.cellFilters[`${payload.row}_${payload.col}`];
+
+      const dentroDaMascara = isCellInsideContainerMask(
+        cx, cy, store.gridOffsetX, store.gridOffsetY, gw, gh, store.gridContainerShape,
+      );
+
+      if (!dentroDaMascara) {
+        // Fora do contorno não há voo: a foto pousa direto, sem preview nenhum.
+        placeTile(payload);
+        return;
+      }
+
+      await new Promise<void>((resolve) => {
+        let settled = false;
+        const finish = () => {
+          if (settled) return;
+          settled = true;
+          window.clearTimeout(guard);
+          placeTile(payload);
+          resolve();
+        };
+        // Rede de segurança: se a animação nunca chamar onComplete, a fila
+        // seguiria parada para sempre e o telão congelava no meio do evento.
+        const guard = window.setTimeout(() => {
+          console.warn('[Mosaico] Animação não completou a tempo; seguindo a fila.');
+          finish();
+        }, ANIMATION_TIMEOUT_MS);
+
+        try {
+          animateTileFlight({
+            flyingContainer: flying,
+            landedContainer: landed,
+            texture: texture as PIXI.Texture,
+            startX: store.screenWidth / 2,
+            startY: store.screenHeight / 2,
+            targetX,
+            targetY,
+            targetWidth: tileW,
+            targetHeight: tileH,
+            gridShape: store.gridShape,
+            preset: store.animationPreset,
+            duration: store.animationDuration,
+            centralPreviewDuration: store.centralPreviewDuration,
+            cellFilter,
+            ease: store.animationEase,
+            cardSize: previewCardSize(store.screenHeight, store.previewCardScale),
+            onComplete: finish,
+          });
+        } catch (e) {
+          console.error('[Mosaico] animateTileFlight falhou:', e);
+          finish();
+        }
+      });
+    };
+
+    /**
+     * Drena a fila em série. O `finally` garante que a trava sempre caia: sem
+     * ele, um único erro deixava `isAnimating` preso em true e nenhuma foto
+     * seguinte aparecia — o mosaico simplesmente parava de receber.
+     */
+    const processQueue = async () => {
+      if (isAnimating.current) return;
+      isAnimating.current = true;
+      try {
+        while (animationQueue.current.length > 0 && !unmounted) {
+          const payload = animationQueue.current.shift();
+          if (!payload) continue;
+          try {
+            await animateOne(payload);
+          } catch (e) {
+            console.error('[Mosaico] Falha ao animar tile; seguindo a fila:', e);
+            try {
+              placeTile(payload);
+            } catch {
+              /* pousar é best-effort; a fila não pode parar por causa disso */
+            }
+          }
+        }
+      } finally {
+        isAnimating.current = false;
+      }
+    };
+
+    /**
+     * MODO OCIOSO — sem foto nova, o telão volta a destacar fotos que já estão
+     * no mosaico.
+     *
+     * Numa ativação, o fluxo da cabine tem buracos (fila, troca de grupo, café)
+     * e a tela ficava congelada. Aqui a foto sorteada refaz o mesmo caminho de
+     * sempre: cartão no centro e voo de volta para a MESMA célula — nada é
+     * duplicado e o mosaico não muda.
+     */
+    const ultimoTileEm = { valor: Date.now() };
+    const ultimoReplayEm = { valor: 0 };
+    let ultimoReplayId: string | null = null;
+
+    const talvezDestacarFotoAntiga = () => {
+      const store = useMosaicStore.getState();
+      if (!store.idleReplayEnabled || store.runState !== 'running') return;
+      // Só entra em cena quando não há nada de verdade acontecendo.
+      if (isAnimating.current || animationQueue.current.length > 0) return;
+
+      const agora = Date.now();
+      if (agora - ultimoTileEm.valor < store.idleReplayDelay * 1000) return;
+      if (agora - ultimoReplayEm.valor < store.idleReplayInterval * 1000) return;
+
+      const pousadas = Object.values(store.placedTiles).filter((t) => t.url);
+      if (pousadas.length === 0) return;
+
+      // Evita repetir a mesma foto duas vezes seguidas quando há alternativa.
+      let escolhida = pousadas[Math.floor(Math.random() * pousadas.length)];
+      if (pousadas.length > 1 && escolhida.photo_id === ultimoReplayId) {
+        const outras = pousadas.filter((t) => t.photo_id !== ultimoReplayId);
+        escolhida = outras[Math.floor(Math.random() * outras.length)];
+      }
+
+      ultimoReplayId = escolhida.photo_id;
+      ultimoReplayEm.valor = agora;
+      animationQueue.current.push({ ...escolhida });
+      processQueue();
+    };
+
+    const idleTimer = window.setInterval(talvezDestacarFotoAntiga, 1000);
 
     const handleMessage = (event: MessageEvent) => {
       try {
@@ -220,6 +424,9 @@ export const PixiViewport: React.FC = () => {
           }
           if (data.payload?.target_base_url) {
             setTargetBaseUrl(data.payload.target_base_url);
+          }
+          if (data.payload?.foreground_url) {
+            useMosaicStore.getState().setForegroundUrl(data.payload.foreground_url);
           }
           if (Array.isArray(data.payload?.placed_tiles)) {
             data.payload.placed_tiles.forEach((tile: any) => placeTile(tile));
@@ -257,44 +464,11 @@ export const PixiViewport: React.FC = () => {
         } else if (data.type === 'PHOTO_INGESTED') {
           addPendingPhoto(data.payload);
         } else if (data.type === 'TILE_PLACED') {
-          const payload = data.payload;
-          placeTile(payload);
-
-          if (flying && landed) {
-            const texture = PIXI.Texture.from(payload.url);
-            const gw = store.gridWidth > 0 ? store.gridWidth : store.screenWidth;
-            const gh = store.gridHeight > 0 ? store.gridHeight : store.screenHeight;
-            const tileW = gw / store.cols;
-            const tileH = gh / store.rows;
-
-            const targetX = store.gridOffsetX + payload.col * tileW;
-            const targetY = store.gridOffsetY + payload.row * tileH;
-            const cx = targetX + tileW / 2;
-            const cy = targetY + tileH / 2;
-
-            const cellFilter = store.cellFilters[`${payload.row}_${payload.col}`];
-
-            if (isCellInsideContainerMask(cx, cy, store.gridOffsetX, store.gridOffsetY, gw, gh, store.gridContainerShape)) {
-              animateTileFlight({
-                flyingContainer: flying,
-                landedContainer: landed,
-                texture,
-                startX: store.screenWidth / 2,
-                startY: store.screenHeight / 2,
-                targetX,
-                targetY,
-                targetWidth: tileW,
-                targetHeight: tileH,
-                gridShape: store.gridShape,
-                preset: store.animationPreset,
-                duration: store.animationDuration,
-                centralPreviewDuration: store.centralPreviewDuration,
-                cellFilter,
-                ease: store.animationEase,
-                cardSize: previewCardSize(store.screenHeight),
-              });
-            }
-          }
+          // Só foto vinda do backend adia o modo ocioso; o destaque de uma foto
+          // antiga não pode reiniciar o próprio relógio, senão nunca repetiria.
+          ultimoTileEm.valor = Date.now();
+          animationQueue.current.push(data.payload);
+          processQueue();
         }
       } catch (e) {
         console.error('WS Error:', e);
@@ -336,6 +510,10 @@ export const PixiViewport: React.FC = () => {
 
     return () => {
       unmounted = true;
+      // O ref sobrevive ao remount do effect (StrictMode em dev): sem este reset
+      // a próxima montagem herdava a trava e nunca processava a fila.
+      isAnimating.current = false;
+      window.clearInterval(idleTimer);
       if (reconnectTimer) window.clearTimeout(reconnectTimer);
       ws?.close();
       setSocketConnected(false);
@@ -345,6 +523,10 @@ export const PixiViewport: React.FC = () => {
   useEffect(() => {
     drawBaseImage();
   }, [targetBaseUrl, screenWidth, screenHeight]);
+
+  useEffect(() => {
+    drawForegroundLogo();
+  }, [foregroundUrl, screenWidth, screenHeight]);
 
   useEffect(() => {
     const layerMap: Record<string, PIXI.Container | PIXI.Graphics | null> = {
@@ -382,8 +564,14 @@ export const PixiViewport: React.FC = () => {
       const cy = targetY + tileH / 2;
 
       // Filtra fotos para que NUNCA apareçam fora do contorno da forma
-      if (!isCellInsideContainerMask(cx, cy, gridOffsetX, gridOffsetY, gw, gh, gridContainerShape)) {
-        return;
+      if (gridContainerShape === 'custom_mask') {
+        if (!customMaskCells.includes(`${tile.row}_${tile.col}`)) {
+          return;
+        }
+      } else {
+        if (!isCellInsideContainerMask(cx, cy, gridOffsetX, gridOffsetY, gw, gh, gridContainerShape)) {
+          return;
+        }
       }
 
       const texture = PIXI.Texture.from(tile.url);
@@ -451,12 +639,12 @@ export const PixiViewport: React.FC = () => {
 
       landedContainer.addChild(tileContainer);
     });
-  }, [placedTiles, cellFilters, gridOffsetX, gridOffsetY, gridWidth, gridHeight, rows, cols, gridShape, gridContainerShape, screenWidth, screenHeight]);
+  }, [placedTiles, cellFilters, gridOffsetX, gridOffsetY, gridWidth, gridHeight, rows, cols, gridShape, gridContainerShape, screenWidth, screenHeight, customMaskCells]);
 
   useEffect(() => {
     if (!layer3Grid.current) return;
     drawGrid();
-  }, [rows, cols, gridOffsetX, gridOffsetY, gridWidth, gridHeight, gridColor, gridThickness, gridOpacity, gridShape, gridContainerShape, cellFilters, placedTiles]);
+  }, [rows, cols, gridOffsetX, gridOffsetY, gridWidth, gridHeight, gridColor, gridThickness, gridOpacity, gridShape, gridContainerShape, cellFilters, customMaskCells, placedTiles]);
 
   const drawGrid = () => {
     const g = layer3Grid.current;
@@ -598,9 +786,12 @@ export const PixiViewport: React.FC = () => {
           const cx = gridOffsetX + (c + 0.5) * tileW;
           const cy = gridOffsetY + (r + 0.5) * tileH;
 
-          // Filtra linhas de grade para NUNCA desenhar fora do contorno da forma
-          if (!isCellInsideContainerMask(cx, cy, gridOffsetX, gridOffsetY, gw, gh, gridContainerShape)) {
-            continue;
+          if (gridContainerShape === 'custom_mask') {
+            if (!customMaskCells.includes(`${r}_${c}`)) continue;
+          } else {
+            if (!isCellInsideContainerMask(cx, cy, gridOffsetX, gridOffsetY, gw, gh, gridContainerShape)) {
+              continue;
+            }
           }
 
           const hw = tileW / 2;
@@ -620,8 +811,12 @@ export const PixiViewport: React.FC = () => {
           const cx = gridOffsetX + c * tileW + rowOffset + tileW / 2;
           const cy = gridOffsetY + r * (tileH * 0.75) + tileH / 2;
 
-          if (!isCellInsideContainerMask(cx, cy, gridOffsetX, gridOffsetY, gw, gh, gridContainerShape)) {
-            continue;
+          if (gridContainerShape === 'custom_mask') {
+            if (!customMaskCells.includes(`${r}_${c}`)) continue;
+          } else {
+            if (!isCellInsideContainerMask(cx, cy, gridOffsetX, gridOffsetY, gw, gh, gridContainerShape)) {
+              continue;
+            }
           }
 
           const rad = Math.min(tileW, tileH) / 2;
@@ -691,7 +886,8 @@ export const PixiViewport: React.FC = () => {
 
     if (!dragState.active || !containerRef.current) return;
 
-    const rect = containerRef.current.getBoundingClientRect();
+    const target = containerRef.current.querySelector('canvas') || containerRef.current;
+    const rect = target.getBoundingClientRect();
     const scaleX = screenWidth / rect.width;
     const scaleY = screenHeight / rect.height;
 
@@ -741,7 +937,8 @@ export const PixiViewport: React.FC = () => {
   const handleCanvasContextMenu = (e: React.MouseEvent) => {
     e.preventDefault();
     if (!containerRef.current) return;
-    const rect = containerRef.current.getBoundingClientRect();
+    const target = containerRef.current.querySelector('canvas') || containerRef.current;
+    const rect = target.getBoundingClientRect();
     const scaleX = screenWidth / rect.width;
     const scaleY = screenHeight / rect.height;
 
@@ -763,7 +960,8 @@ export const PixiViewport: React.FC = () => {
 
   const paintCellFromMouseEvent = (e: React.MouseEvent) => {
     if (!containerRef.current) return;
-    const rect = containerRef.current.getBoundingClientRect();
+    const target = containerRef.current.querySelector('canvas') || containerRef.current;
+    const rect = target.getBoundingClientRect();
     const scaleX = screenWidth / rect.width;
     const scaleY = screenHeight / rect.height;
 
@@ -808,7 +1006,8 @@ export const PixiViewport: React.FC = () => {
       return;
     }
     if (dragState.active || !containerRef.current) return;
-    const rect = containerRef.current.getBoundingClientRect();
+    const target = containerRef.current.querySelector('canvas') || containerRef.current;
+    const rect = target.getBoundingClientRect();
     const scaleX = screenWidth / rect.width;
     const scaleY = screenHeight / rect.height;
 

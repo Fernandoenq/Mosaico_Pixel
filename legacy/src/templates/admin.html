@@ -1,0 +1,619 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <title>Mosaico Pixel - Admin Panel</title>
+  <style>
+    :root {
+      --bg-dark: #201a35;
+      --bg-panel: #ffffff;
+      --primary: #5c35b1;
+      --text-dark: #333;
+      --border: #e0e0e0;
+    }
+    body {
+      margin: 0;
+      padding: 0;
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      display: flex;
+      height: 100vh;
+      background: #f4f4f9;
+    }
+    /* Left Sidebar */
+    .sidebar {
+      width: 60px;
+      background: var(--bg-dark);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding-top: 20px;
+    }
+    .sidebar-icon {
+      width: 40px;
+      height: 40px;
+      margin: 10px 0;
+      background: rgba(255,255,255,0.1);
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: white;
+      cursor: pointer;
+      font-size: 18px;
+    }
+    .sidebar-icon:hover, .sidebar-icon.active {
+      background: var(--primary);
+    }
+    /* Main Content */
+    .main-content {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+    }
+    .top-bar {
+      height: 50px;
+      background: linear-gradient(90deg, #d32f2f, #5c35b1);
+      color: white;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 20px;
+      font-weight: bold;
+      font-size: 18px;
+    }
+    .workspace {
+      flex: 1;
+      display: flex;
+      padding: 20px;
+      gap: 20px;
+      overflow: hidden;
+    }
+    /* Preview Area */
+    .preview-container {
+      flex: 1;
+      background: #111;
+      border-radius: 8px;
+      overflow: hidden;
+      box-shadow: 0 4px 10px rgba(0,0,0,0.1);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      position: relative;
+    }
+    /* Iframe Wrapper is needed to position the grid precisely on top of the content */
+    .iframe-wrapper {
+      position: relative;
+      background: #000;
+      /* Dynamic aspect ratio will be set via JS based on W/H */
+    }
+    .iframe-wrapper iframe {
+      width: 100%;
+      height: 100%;
+      border: none;
+      display: block;
+    }
+    .grid-overlay {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
+      display: none;
+      background-size: 100% 100%;
+      border: 2px solid #00ff00;
+    }
+    
+    /* Right Settings Panel */
+    .settings-panel {
+      width: 350px;
+      background: var(--bg-panel);
+      border-radius: 8px;
+      box-shadow: 0 4px 10px rgba(0,0,0,0.1);
+      display: flex;
+      flex-direction: column;
+      overflow-y: auto;
+    }
+    .settings-header {
+      padding: 15px;
+      border-bottom: 1px solid var(--border);
+      font-weight: bold;
+      color: var(--primary);
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .settings-group {
+      padding: 15px;
+      border-bottom: 1px solid var(--border);
+    }
+    .settings-group h3 {
+      margin: 0 0 15px 0;
+      font-size: 14px;
+      color: var(--text-dark);
+    }
+    .form-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 10px;
+    }
+    .form-row label {
+      font-size: 12px;
+      color: #555;
+    }
+    .form-row input[type="number"], .form-row input[type="text"], .form-row input[type="file"] {
+      width: 100px;
+      padding: 5px;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      text-align: right;
+    }
+    .form-row input[type="file"] {
+      width: 160px;
+      font-size: 10px;
+    }
+    .calc-visor {
+      background: #f0f0f5;
+      padding: 10px;
+      border-radius: 6px;
+      margin-bottom: 10px;
+      font-family: monospace;
+      font-size: 13px;
+      color: #333;
+      text-align: center;
+      border: 1px solid #dcdcdc;
+    }
+    .btn-export {
+      width: 100%;
+      padding: 10px;
+      background: #e0e0e0;
+      border: none;
+      border-radius: 4px;
+      font-weight: bold;
+      cursor: pointer;
+      margin-top: 10px;
+    }
+    .btn-export:hover {
+      background: #d0d0d0;
+    }
+    input[type="range"] {
+      width: 120px;
+    }
+  </style>
+</head>
+<body>
+  
+  <div class="sidebar">
+    <div class="sidebar-icon active" onclick="switchTab(this, 'home')">🏠</div>
+    <div class="sidebar-icon" onclick="switchTab(this, 'grid')">📐</div>
+    <div class="sidebar-icon" onclick="switchTab(this, 'assets')">⚙️</div>
+    <div class="sidebar-icon" onclick="switchTab(this, 'photos')">📷</div>
+    <div class="sidebar-icon" onclick="switchTab(this, 'hsbc')" title="Mosaico HSBC">🎥</div>
+  </div>
+
+  <div class="main-content">
+    <div class="top-bar">
+      <span>Visual wall settings</span>
+      <label style="font-size:14px; cursor:pointer;">
+        <input type="checkbox" id="chkShowGrid" onchange="toggleGrid()"> Mostrar Grade de Preview
+      </label>
+    </div>
+    
+    <div class="workspace">
+      <!-- Preview do Telão -->
+      <div class="preview-container" style="overflow: hidden; position: relative;">
+        <!-- Zoom controls -->
+        <div style="position: absolute; top: 10px; right: 10px; z-index: 100; display: flex; flex-direction: column; gap: 5px;">
+            <button onclick="zoomPreview(0.1)" style="width: 30px; height: 30px; border-radius: 5px; background: rgba(0,0,0,0.5); color: white; border: none; cursor: pointer;">➕</button>
+            <button onclick="zoomPreview(-0.1)" style="width: 30px; height: 30px; border-radius: 5px; background: rgba(0,0,0,0.5); color: white; border: none; cursor: pointer;">➖</button>
+            <button onclick="resetPreviewZoom()" style="width: 30px; height: 30px; border-radius: 5px; background: rgba(0,0,0,0.5); color: white; border: none; cursor: pointer;">↺</button>
+        </div>
+        <div class="iframe-wrapper" id="iframeWrapper" style="transform-origin: center center; transition: transform 0.1s;">
+          <iframe src="/telao" id="previewFrame"></iframe>
+          <div class="grid-overlay" id="gridOverlay"></div>
+        </div>
+      </div>
+      
+      <!-- Settings Panel -->
+      <div class="settings-panel">
+        <div class="settings-header">
+          <span>📐</span> Wall Options
+        </div>
+        
+        <div class="settings-group" id="group-grid">
+          <h3>Marking (Grid)</h3>
+          
+          <div class="calc-visor" id="calcVisor">
+            Cell Size: -- x -- px
+          </div>
+          <div class="form-row">
+            <h3 style="margin-bottom:5px;">Galeria Recebida</h3>
+            <p style="font-size:11px; color:#666; margin-top:0;">Pastas sendo monitoradas</p>
+            <div class="btn-export" style="background:#5c35b1; color:white; text-align:center; padding:8px; font-size:12px; cursor:pointer;" onclick="clearGallery()">Limpar Galeria / Mosaico Atual</div>
+          </div>
+          <div class="form-row" style="margin-top:20px;">
+            <label style="font-size:12px;">Teste Anim. (Gera 1 tela cor)</label>
+            <button onclick="testAnimation()" style="padding:4px 8px; cursor:pointer;">Inserir 1</button>
+          </div>
+          <div class="form-row">
+            <label>Preenchimento</label>
+            <label style="font-size:11px; cursor:pointer;">
+              <input type="checkbox" id="chkDuplicate" onchange="updateSettings()"> Repetir fotos p/ completar mosaico
+            </label>
+          </div>
+
+          <div class="form-row">
+            <label>Number of columns</label>
+            <input type="number" id="inpCols" value="20" onchange="updateSettings()">
+          </div>
+          <div class="form-row">
+            <label>Number of rows</label>
+            <input type="number" id="inpRows" value="15" onchange="updateSettings()">
+          </div>
+          
+          <div style="margin-top:20px; border-top:1px dashed #ccc; padding-top:10px;"></div>
+          
+          <div class="form-row">
+            <label>Wall width (pixel)</label>
+            <input type="number" id="inpWidth" value="768" onchange="updateSettings()">
+          </div>
+          <div class="form-row">
+            <label>Wall height (pixel)</label>
+            <input type="number" id="inpHeight" value="960" onchange="updateSettings()">
+          </div>
+          
+          <button class="btn-export" onclick="document.getElementById('previewFrame').contentWindow.location.reload();">🔄 Recarregar Telão</button>
+        </div>
+        
+        <div class="settings-group" id="group-assets" style="display:none">
+          <h3>Assets (Background & Overlay)</h3>
+          <div class="form-row">
+            <label>Trocar Background</label>
+            <input type="file" id="inpBackground" accept="image/*" onchange="uploadAsset('background')">
+          </div>
+        </div>
+        
+        <div class="settings-group" id="group-hsbc" style="display:none">
+          <h3>Mosaico Animado (HSBC)</h3>
+          <p style="font-size:11px; color:#666; margin-top:0;">
+            Gera o vídeo do mosaico geometricamente perfeito para o HSBC usando as fotos atuais da Galeria.
+          </p>
+          
+          <div class="form-row" style="margin-top: 15px; flex-direction: column; align-items: flex-start; gap: 8px;">
+            <label style="font-size: 13px; font-weight: bold; color: var(--text-dark);">
+              1. Imagem de Fundo (Logo)
+            </label>
+            <input type="file" id="inp-hsbc-bg" accept="image/*" style="width: 100%;">
+          </div>
+
+          <div class="form-row" style="margin-top: 15px; flex-direction: column; align-items: flex-start;">
+            <label style="font-size: 13px; font-weight: bold; color: var(--text-dark);">
+              2. Imagens Base
+            </label>
+            <p style="font-size:11px; color:#666; margin: 4px 0 0 0;">
+              O algoritmo já irá usar todas as <b>fotos recebidas na Galeria</b>.
+            </p>
+          </div>
+          
+          <div class="form-row" style="margin-top: 15px; flex-direction: row; justify-content: flex-start; align-items: center; gap: 8px;">
+            <input type="checkbox" id="chk-fill-internal" checked style="width: 16px; height: 16px; cursor: pointer;">
+            <label for="chk-fill-internal" style="font-size: 12px; font-weight: bold; color: var(--text-dark); cursor: pointer;">
+              Preencher o vazio interno (Gravata-borboleta)
+            </label>
+          </div>
+
+          <button onclick="generateHsbcVideo()" id="btnGenerateHsbc" class="btn-export" style="background:#d32f2f; color:white; margin-top: 25px; height: 45px; font-size: 14px;">
+            ▶ GERAR VÍDEO ANIMADO
+          </button>
+          
+          <div id="hsbc-status" style="margin-top: 15px; font-size: 12px; font-weight: bold; color: #5c35b1; text-align: center;"></div>
+        </div>
+        
+        <div class="settings-group" id="group-main">
+          <h3>Animations</h3>
+          <div class="form-row">
+            <label>Modo de Entrada</label>
+            <select id="inpAnimMode" onchange="updateSettings()" style="width: 140px; padding: 5px; border-radius: 4px; font-size: 11px;">
+              <option value="mosaic_fly_in">Preview Centralizado (Cores Normais)</option>
+              <option value="mosaic_fly_in_red">Preview Centralizado (Com Filtro Vermelho)</option>
+              <option value="chaotic_fly_in">Animação do Vídeo (Voo Caótico)</option>
+              <option value="hero_spotlight_pulse">Spotlight Pulse</option>
+              <option value="soft_zoom_fade">Soft Zoom Fade</option>
+              <option value="staggered_grid_cascade">Cascata na Grade</option>
+              <option value="pure_fade_mosaic">Fade Simples</option>
+              <option value="suave_deslize">Deslize Suave</option>
+            </select>
+          </div>
+          <div class="form-row">
+            <label>Velocidade / Duração</label>
+            <select id="inpAnimSpeed" onchange="updateSettings()" style="width: 140px; padding: 5px; border-radius: 4px; font-size: 11px;">
+              <option value="lento">Lento</option>
+              <option value="medio" selected>Médio</option>
+              <option value="rapido">Rápido</option>
+            </select>
+          </div>
+          
+
+          <div class="form-row" style="margin-top: 10px;">
+            <button class="btn-export" onclick="testarAnimacao()" style="background: #5c35b1; color: white;">▶ Testar Animação (Foto Fake)</button>
+          </div>
+          <div class="form-row" style="margin-top: 5px; display: flex; gap: 5px;">
+            <button class="btn-export" onclick="sendAction('restart')" style="flex:1; background: #007bff; color: white; font-size: 11px;">🔄 Reiniciar Mosaico (Teste)</button>
+            <button class="btn-export" onclick="sendAction('clear')" style="flex:1; background: #dc3545; color: white; font-size: 11px;">🗑️ Limpar Mosaico (Só Fundo)</button>
+          </div>
+
+          
+          <div style="margin-top:20px; border-top:1px dashed #ccc; padding-top:10px;"></div>
+
+          <h3>Main Image</h3>
+          <div class="form-row">
+            <label>Opacity (%)</label>
+            <input type="range" id="inpOpacity" min="0" max="100" value="85" onchange="updateSettings()">
+            <span id="lblOpacity" style="font-size:12px">85</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // Inicializa a calculadora
+    window.onload = function() {
+      updateCalculations();
+      resizeWrapper();
+    }
+
+    window.addEventListener("resize", resizeWrapper);
+
+    function resizeWrapper() {
+      const container = document.querySelector('.preview-container');
+      const wrapper = document.getElementById('iframeWrapper');
+      const w = parseInt(document.getElementById('inpWidth').value) || 768;
+      const h = parseInt(document.getElementById('inpHeight').value) || 960;
+      
+      const aspect = w / h;
+      const containerAspect = container.clientWidth / container.clientHeight;
+      
+      if (aspect > containerAspect) {
+        // Fits by width
+        wrapper.style.width = '100%';
+        wrapper.style.height = (container.clientWidth / aspect) + 'px';
+      } else {
+        // Fits by height
+        wrapper.style.height = '100%';
+        wrapper.style.width = (container.clientHeight * aspect) + 'px';
+      }
+    }
+
+    function updateCalculations() {
+      const cols = parseInt(document.getElementById('inpCols').value) || 1;
+      const rows = parseInt(document.getElementById('inpRows').value) || 1;
+      const width = parseInt(document.getElementById('inpWidth').value) || 0;
+      const height = parseInt(document.getElementById('inpHeight').value) || 0;
+      
+      const cellW = (width / cols).toFixed(1);
+      const cellH = (height / rows).toFixed(1);
+      
+      document.getElementById('calcVisor').innerHTML = `Cell Size: <strong>${cellW}</strong> x <strong>${cellH}</strong> px`;
+      
+      // Update grid CSS overlay
+      const gridOverlay = document.getElementById('gridOverlay');
+      gridOverlay.style.backgroundImage = `
+        linear-gradient(to right, #00ff00 1px, transparent 1px),
+        linear-gradient(to bottom, #00ff00 1px, transparent 1px)
+      `;
+      gridOverlay.style.backgroundSize = `${100/cols}% ${100/rows}%`;
+      
+      resizeWrapper();
+    }
+
+    
+    function switchTab(el, tabName) {
+      document.querySelectorAll('.sidebar-icon').forEach(i => i.classList.remove('active'));
+      el.classList.add('active');
+      
+      const groups = ['home', 'grid', 'assets', 'photos', 'hsbc', 'main'];
+      groups.forEach(g => {
+        const div = document.getElementById('group-' + g);
+        if (div) {
+          div.style.display = (g === tabName) ? 'block' : 'none';
+        }
+      });
+      if (tabName === 'home') {
+        document.getElementById('group-grid').style.display = 'block';
+        document.getElementById('group-main').style.display = 'block';
+      } else if (tabName === 'grid') {
+        document.getElementById('group-grid').style.display = 'block';
+      } else if (tabName === 'assets') {
+        document.getElementById('group-assets').style.display = 'block';
+      }
+    }
+
+    function toggleGrid() {
+      const grid = document.getElementById('gridOverlay');
+      grid.style.display = document.getElementById('chkShowGrid').checked ? 'block' : 'none';
+    }
+
+    function updateSettings() {
+      updateCalculations();
+      
+      const cols = document.getElementById('inpCols').value;
+      const rows = document.getElementById('inpRows').value;
+      const width = document.getElementById('inpWidth').value;
+      const height = document.getElementById('inpHeight').value;
+      const opacity = document.getElementById('inpOpacity').value;
+      
+      document.getElementById('lblOpacity').innerText = opacity;
+
+      const payload = {
+          opacity: (opacity || 100) / 100.0,
+          animation_mode: document.getElementById('inpAnimMode').value,
+          animation_intensity: document.getElementById('inpAnimSpeed').value,
+          duplicate_fill: document.getElementById('chkDuplicate').checked
+      };
+      
+      if (cols) payload.cols = parseInt(cols);
+      if (rows) payload.rows = parseInt(rows);
+      if (width) payload.width = parseInt(width);
+      if (height) payload.height = parseInt(height);
+
+      fetch('/api/settings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      })
+      .then(r => r.json())
+      .catch(err => console.error(err));
+    }
+
+    
+    
+    let pzScale = 1;
+    let pzPanX = 0;
+    let pzPanY = 0;
+    let isPanning = false;
+    let startX = 0;
+    let startY = 0;
+
+    function applyPZ() {
+        document.getElementById('iframeWrapper').style.transform = `translate(${pzPanX}px, ${pzPanY}px) scale(${pzScale})`;
+    }
+
+    function zoomPreview(delta) {
+        pzScale += delta;
+        if(pzScale < 0.2) pzScale = 0.2;
+        if(pzScale > 5) pzScale = 5;
+        applyPZ();
+    }
+
+    function resetPreviewZoom() {
+        pzScale = 1; pzPanX = 0; pzPanY = 0;
+        applyPZ();
+    }
+
+    // Pan (arrastar)
+    document.querySelector('.preview-container').addEventListener('mousedown', (e) => {
+        if(e.button !== 0) return; // so esquerdo
+        // Não intercepta cliques nos botoes de zoom
+        if(e.target.tagName === 'BUTTON') return;
+        isPanning = true;
+        startX = e.clientX - pzPanX;
+        startY = e.clientY - pzPanY;
+        e.preventDefault();
+    });
+
+    document.addEventListener('mousemove', (e) => {
+        if(!isPanning) return;
+        pzPanX = e.clientX - startX;
+        pzPanY = e.clientY - startY;
+        applyPZ();
+    });
+
+    document.addEventListener('mouseup', () => {
+        isPanning = false;
+    });
+
+    // Pinch / Wheel
+    document.querySelector('.preview-container').addEventListener('wheel', (e) => {
+        e.preventDefault();
+        zoomPreview(e.deltaY < 0 ? 0.1 : -0.1);
+    });
+
+    function sendAction(cmd) {
+      fetch('/api/action', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ command: cmd })
+      })
+      .then(r => r.json())
+      .then(data => console.log('Ação disparada', data))
+      .catch(err => alert('Erro: ' + err));
+    }
+
+    function testarAnimacao() {
+      fetch('/api/test_animation', { method: 'POST' })
+      .then(r => r.json())
+      .then(data => console.log('Teste disparado!', data))
+      .catch(err => alert('Erro: ' + err));
+    }
+
+    function uploadAsset(type) {
+      let inputId = type === 'background' ? 'inpBackground' : '';
+      const file = document.getElementById(inputId).files[0];
+      if (!file) return;
+
+      const reader = new FileReader();
+      reader.onload = function(event) {
+        const base64String = event.target.result;
+        let payload = {};
+        if (type === 'background') {
+          payload.backdrop_base64 = base64String;
+        }
+        
+        fetch('/api/settings', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        })
+        .then(r => r.json())
+        .then(data => {
+          alert('Upload concluído com sucesso!');
+          // document.getElementById('previewFrame').contentWindow.location.reload();
+        })
+        .catch(err => alert('Erro no upload: ' + err));
+      };
+      reader.readAsDataURL(file);
+    }
+    // --- HSBC ANIMATOR ---
+    async function generateHsbcVideo() {
+      const fileInput = document.getElementById('inp-hsbc-bg');
+      if (!fileInput.files || fileInput.files.length === 0) {
+        alert("Por favor, selecione a imagem de fundo (Logo HSBC).");
+        return;
+      }
+
+      const statusEl = document.getElementById('hsbc-status');
+      const btnEl = document.getElementById('btnGenerateHsbc');
+      
+      statusEl.textContent = "Lendo imagem de fundo...";
+      btnEl.disabled = true;
+      btnEl.style.opacity = '0.5';
+
+      try {
+        const file = fileInput.files[0];
+        const reader = new FileReader();
+        reader.readAsDataURL(file);
+        reader.onload = async () => {
+          const base64Str = reader.result;
+          const fillInternal = document.getElementById('chk-fill-internal').checked;
+          
+          statusEl.textContent = "Gerando vídeo (isso pode demorar minutos)...";
+          
+          const response = await fetch('/api/hsbc/generate', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ bg_base64: base64Str, fill_internal: fillInternal })
+          });
+          
+          const result = await response.json();
+          if (result.ok) {
+            statusEl.textContent = "Vídeo gerado! Abrindo...";
+            window.open(result.url, '_blank');
+          } else {
+            statusEl.textContent = "Erro: " + result.msg;
+            alert("Falha: " + result.msg);
+          }
+          btnEl.disabled = false;
+          btnEl.style.opacity = '1';
+        };
+      } catch (e) {
+        statusEl.textContent = "Erro interno.";
+        console.error(e);
+        btnEl.disabled = false;
+        btnEl.style.opacity = '1';
+      }
+    }
+  </script>
+</body>
+</html>

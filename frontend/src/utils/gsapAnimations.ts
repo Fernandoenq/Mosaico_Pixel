@@ -22,9 +22,19 @@ export const PRESET_DEFAULT_EASE: Record<AnimationPreset, string> = {
 const resolveEase = (ease: string | undefined, preset: AnimationPreset): string =>
   !ease || ease === AUTO_EASE ? PRESET_DEFAULT_EASE[preset] : ease;
 
-/** Tamanho do cartão de preview central, proporcional à altura do telão. */
-export const previewCardSize = (screenHeight: number): number =>
-  Math.max(80, Math.round(screenHeight * 0.278));
+/**
+ * Tamanho do cartão de preview central, em px do palco.
+ *
+ * A fração vem da config (slider "Tamanho do Preview" no painel) e não do
+ * código: assim o operador vê o efeito na hora, sem recarregar o telão.
+ * 1.0 = a foto mais a moldura ocupam a altura inteira do telão.
+ */
+export const previewCardSize = (screenHeight: number, scale = 1.0): number => {
+  const fracao = Math.min(1, Math.max(0.2, scale));
+  // 0.97 reserva o espaco da moldura: em 100% o conjunto ocupa a altura
+  // inteira do telao sem passar das bordas.
+  return Math.max(150, Math.round(screenHeight * fracao * 0.97));
+};
 
 export interface FlyAnimationParams {
   flyingContainer: PIXI.Container;
@@ -92,35 +102,66 @@ export const animateTileFlight = ({
   gridShape = 'square',
   preset = 'hsbc_cascade',
   duration = 0.8,
-  centralPreviewDuration = 0.8,
+  centralPreviewDuration = 10.0,
   cellFilter,
   ease = AUTO_EASE,
-  cardSize = 300,
+  cardSize = 1000,
   onComplete,
 }: FlyAnimationParams): gsap.core.Timeline => {
   const flightEase = resolveEase(ease, preset);
-
-  // Escala em que o cartão central encosta no tamanho real do ladrilho. Derivada
-  // do cartão para o pouso casar em qualquer resolução de telão.
-  const landScale = Math.max(0.02, targetWidth / cardSize);
 
   // Container wrapper para o Preview Central com moldura (Camada 2 - Foto Voadora)
   const wrapper = new PIXI.Container();
   wrapper.x = startX;
   wrapper.y = startY;
 
-  const half = cardSize / 2;
-  const pad = cardSize / 60;
+  const pad = cardSize / 90;
   const cardBorder = new PIXI.Graphics();
-  cardBorder.lineStyle(Math.max(1, cardSize / 100), 0x00ffff, 0.9);
-  cardBorder.drawRoundedRect(-(half + pad), -(half + pad), cardSize + pad * 2, cardSize + pad * 2, cardSize * 0.053);
-  wrapper.addChild(cardBorder);
 
   // Sprite de preview central com anchor em 0.5 (centro)
   const previewSprite = new PIXI.Sprite(texture);
   previewSprite.anchor.set(0.5);
-  previewSprite.width = cardSize;
-  previewSprite.height = cardSize;
+
+  // Largura efetiva do preview. Vira `cardSize` só quando a foto é quadrada;
+  // o voo é escalado a partir dela para o cartão pousar do tamanho do ladrilho.
+  let previewWidth = cardSize;
+
+  /**
+   * Encaixa a foto no cartão preservando a proporção e centralizada nos dois
+   * eixos. Antes o sprite era forçado a cardSize×cardSize: como a cabine entrega
+   * retrato 9:16, o rosto saía achatado na horizontal.
+   */
+  const applyPreviewDims = () => {
+    const tw = texture.width;
+    const th = texture.height;
+    if (!texture.valid || tw <= 0 || th <= 0) return;
+
+    const escala = Math.min(cardSize / tw, cardSize / th);
+    const w = Math.round(tw * escala);
+    const h = Math.round(th * escala);
+
+    previewSprite.width = w;
+    previewSprite.height = h;
+    previewWidth = w;
+
+    // A moldura acompanha a foto — num cartão quadrado sobraria borda vazia
+    // dos lados e o conjunto pareceria desalinhado no centro do telão.
+    cardBorder.clear();
+    cardBorder.lineStyle(Math.max(1, cardSize / 100), 0x00ffff, 0.9);
+    cardBorder.drawRoundedRect(
+      -(w / 2 + pad),
+      -(h / 2 + pad),
+      w + pad * 2,
+      h + pad * 2,
+      cardSize * 0.053,
+    );
+  };
+  applyPreviewDims();
+  if (!texture.valid) {
+    texture.baseTexture.once('loaded', applyPreviewDims);
+  }
+
+  wrapper.addChild(cardBorder);
   applySpriteFilter(previewSprite, cellFilter);
   wrapper.addChild(previewSprite);
 
@@ -142,8 +183,18 @@ export const animateTileFlight = ({
     // SEM anchor (padrão 0,0) para posicionamento correto no tile
     landedSprite.x = 0;
     landedSprite.y = 0;
-    landedSprite.width = targetWidth;
-    landedSprite.height = targetHeight;
+
+    const applyLandedDims = () => {
+      if (texture.valid && texture.width > 0 && texture.height > 0) {
+        landedSprite.width = targetWidth;
+        landedSprite.height = targetHeight;
+      }
+    };
+    applyLandedDims();
+    if (!texture.valid) {
+      texture.baseTexture.once('loaded', applyLandedDims);
+    }
+
     applySpriteFilter(landedSprite, cellFilter);
 
     if (gridShape === 'diamond') {
@@ -199,87 +250,69 @@ export const animateTileFlight = ({
     if (onComplete) onComplete();
   };
 
+  // Escala em que o cartão encosta no tamanho real do ladrilho. Sai da largura
+  // efetiva do preview (não do cartão), senão o pouso dá um salto de tamanho.
+  const landScale = Math.max(0.02, targetWidth / previewWidth);
+
   const tl = gsap.timeline({ onComplete: finishAnimation });
 
+  /**
+   * A escala é animada pelo ObservablePoint (`wrapper.scale`), nunca pela
+   * propriedade `wrapper.scale` do Container.
+   *
+   * Sem o PixiPlugin, `gsap.to(wrapper, {scale: 1})` SUBSTITUI o ponto por um
+   * número; o setter do PIXI então faz `copyFrom(1)`, lê `(1).x` — undefined —
+   * e a escala do cartão vira NaN. O preview central simplesmente não era
+   * desenhado: por isso aumentar `cardSize` não mudava nada na tela.
+   */
+  const escala = wrapper.scale;
+  const escalarPara = (valor: number, vars: gsap.TweenVars) =>
+    ({ ...vars, x: valor, y: valor });
+
   // 🌟 FASE 1: PREVIEW CENTRAL NO CENTRO DA TELA (CAMADA 2)
-  wrapper.scale.set(0.1);
-  tl.to(wrapper, {
-    duration: 0.35,
-    scale: 1.0,
-    ease: 'back.out(1.7)',
-  }).to(wrapper, {
-    duration: centralPreviewDuration, // Hold no centro em tamanho de cartão
-    scale: 1.05,
-    ease: 'none',
-  });
+  escala.set(0.1);
+  tl.to(escala, escalarPara(1.0, { duration: 0.35, ease: 'back.out(1.7)' }))
+    // Hold no centro em tamanho de cartão. Sem propriedade que mude, o GSAP
+    // ainda respeita a duração — é justamente o tempo de a pessoa se ver.
+    .to(escala, { duration: centralPreviewDuration, ease: 'none' });
 
   // 🌟 FASE 2: VOO DO CENTRO ATÉ O TILE ALVO (CAMADA 2 → CAMADA 1)
   const targetCX = targetX + targetWidth / 2;
   const targetCY = targetY + targetHeight / 2;
 
+  // `'<'` alinha o tween ao início do anterior: posição e escala precisam
+  // correr juntas, senão o voo vira dois movimentos em sequência.
   if (preset === 'spiral') {
     // 🌀 Entrada em Espiral Giratória (720°)
-    tl.to(wrapper, {
-      duration: duration * 0.4,
-      scale: 0.8,
-      rotation: Math.PI * 2,
-      ease: 'power2.out',
-    }).to(wrapper, {
-      duration: duration * 0.6,
-      x: targetCX,
-      y: targetCY,
-      scale: landScale,
-      rotation: Math.PI * 4,
-      ease: flightEase,
-    });
+    tl.to(escala, escalarPara(0.8, { duration: duration * 0.4, ease: 'power2.out' }))
+      .to(wrapper, { duration: duration * 0.4, rotation: Math.PI * 2, ease: 'power2.out' }, '<')
+      .to(wrapper, {
+        duration: duration * 0.6,
+        x: targetCX,
+        y: targetCY,
+        rotation: Math.PI * 4,
+        ease: flightEase,
+      })
+      .to(escala, escalarPara(landScale, { duration: duration * 0.6, ease: flightEase }), '<');
   } else if (preset === 'hsbc_cascade') {
     // 💎 Cascata HSBC (Hold Central + Deslize em Diamante)
-    tl.to(wrapper, {
-      duration: 0.3,
-      scale: 1.1,
-      ease: 'back.out(2)',
-    }).to(wrapper, {
-      duration: duration,
-      x: targetCX,
-      y: targetCY,
-      scale: landScale,
-      ease: flightEase,
-    });
+    tl.to(escala, escalarPara(1.02, { duration: 0.3, ease: 'back.out(2)' }))
+      .to(wrapper, { duration, x: targetCX, y: targetCY, ease: flightEase })
+      .to(escala, escalarPara(landScale, { duration, ease: flightEase }), '<');
   } else if (preset === 'wave') {
     // 🌊 Onda Sequencial com Bounce Elástico
-    tl.to(wrapper, {
-      duration: duration,
-      x: targetCX,
-      y: targetCY,
-      scale: landScale,
-      ease: flightEase,
-    });
+    tl.to(wrapper, { duration, x: targetCX, y: targetCY, ease: flightEase })
+      .to(escala, escalarPara(landScale, { duration, ease: flightEase }), '<');
   } else if (preset === 'flip_3d') {
     // 🔄 Efeito Flip 3D (Rotação no Eixo Y): colapsa no caminho e reabre no tile
-    tl.to(wrapper, {
-      duration: duration * 0.5,
-      x: targetCX,
-      y: targetCY,
-      scaleX: 0,
-      ease: 'power2.in',
-    }).to(wrapper, {
-      duration: duration * 0.5,
-      scale: landScale,
-      ease: flightEase,
-    });
+    tl.to(wrapper, { duration: duration * 0.5, x: targetCX, y: targetCY, ease: 'power2.in' })
+      .to(escala, { duration: duration * 0.5, x: 0, ease: 'power2.in' }, '<')
+      .to(escala, escalarPara(landScale, { duration: duration * 0.5, ease: flightEase }));
   } else {
     // 🚀 Padrão: Voo Parabólico (Hold Central + Planeio Suave)
-    tl.to(wrapper, {
-      duration: 0.4,
-      scale: 1.1,
-      ease: 'back.out(1.7)',
-    }).to(wrapper, {
-      duration: duration,
-      x: targetCX,
-      y: targetCY,
-      scale: landScale,
-      ease: flightEase,
-    });
+    tl.to(escala, escalarPara(1.1, { duration: 0.4, ease: 'back.out(1.7)' }))
+      .to(wrapper, { duration, x: targetCX, y: targetCY, ease: flightEase })
+      .to(escala, escalarPara(landScale, { duration, ease: flightEase }), '<');
   }
 
   // Devolvida para quem precisa interromper o voo (ex.: replay do preview).
@@ -355,14 +388,18 @@ export const animateTileFlip = (
   newTexture: PIXI.Texture,
   onComplete?: () => void
 ) => {
+  // `scaleX` não existe no PIXI — animar esse nome só criava uma propriedade
+  // solta no sprite e o flip não acontecia. O eixo certo é `scale.x`.
+  const larguraOriginal = sprite.scale.x;
+
   gsap.timeline({
     onComplete: () => {
       sprite.texture = newTexture;
-      gsap.to(sprite, { duration: 0.3, scaleX: 1, ease: 'power2.out', onComplete });
+      gsap.to(sprite.scale, { duration: 0.3, x: larguraOriginal, ease: 'power2.out', onComplete });
     }
-  }).to(sprite, {
+  }).to(sprite.scale, {
     duration: 0.3,
-    scaleX: 0,
+    x: 0,
     ease: 'power2.in'
   });
 };

@@ -10,6 +10,17 @@ class QueueManager:
         self.approved_photos: List[dict] = []
         self.rejected_photos: List[dict] = []
         self.brand_fallbacks: List[dict] = []
+        # Hashes do conteúdo já ingerido nesta rodada. A cabine publica a mesma
+        # foto no bucket com dois nomes (`img_Nmasked` e `originals/...`), o que
+        # colocava a pessoa duas vezes no mosaico. Zera junto com o mosaico.
+        self.seen_hashes: dict = {}
+
+    def is_duplicate(self, content_hash: str) -> Optional[str]:
+        """Retorna o photo_id já ingerido com esse conteúdo, ou None."""
+        return self.seen_hashes.get(content_hash)
+
+    def register_hash(self, content_hash: str, photo_id: str) -> None:
+        self.seen_hashes.setdefault(content_hash, photo_id)
 
     def add_pending(self, photo_id: str, url: str, local_path: str) -> dict:
         item = {

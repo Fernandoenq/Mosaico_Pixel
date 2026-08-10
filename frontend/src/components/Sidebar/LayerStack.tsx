@@ -3,7 +3,7 @@ import { useMosaicStore, Layer } from '../../store/mosaicStore';
 import { Layers, Eye, EyeOff, Sliders } from 'lucide-react';
 
 export const LayerStack: React.FC = () => {
-  const { layers, updateLayer } = useMosaicStore();
+  const { layers, updateLayer, foregroundUrl, setForegroundUrl } = useMosaicStore();
 
   /**
    * Rascunho local, igual às outras abas — quem publica é o "Aplicar no Telão".
@@ -73,22 +73,57 @@ export const LayerStack: React.FC = () => {
               />
             </div>
 
-            {/* Slider de Gaussian Blur (apenas em Logo Overlay) */}
+            {/* Input de Upload de Foreground (apenas em Logo Overlay) */}
             {layer.id === 'logo' && (
-              <div className="flex flex-col gap-1 mt-1">
-                <div className="flex justify-between text-[10px] text-slate-400 font-mono">
-                  <span>Gaussian Blur</span>
-                  <span>{layer.blur}px</span>
+              <div className="flex flex-col gap-2 mt-2 pt-2 border-t border-slate-800">
+                <span className="text-[10px] text-slate-400 font-mono">Imagem da Moldura / Logo</span>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="file"
+                    accept="image/*"
+                    onChange={async (e) => {
+                      const file = e.target.files?.[0];
+                      if (!file) return;
+                      // Sobe para o backend em vez de `URL.createObjectURL`: um
+                      // blob: só existe na aba do painel, então o telão recebia
+                      // uma URL que não conseguia abrir e a moldura não aparecia.
+                      try {
+                        const form = new FormData();
+                        form.append('file', file);
+                        const res = await fetch('/api/ingest/foreground', { method: 'POST', body: form });
+                        if (!res.ok) throw new Error(await res.text());
+                        const { url, hasAlpha } = await res.json();
+                        setForegroundUrl(url);
+                        if (!hasAlpha) {
+                          alert(
+                            'Atenção: esta imagem não tem transparência.\n\n' +
+                            'Ela vai cobrir o mosaico inteiro. Para as fotos aparecerem, ' +
+                            'use um PNG com as áreas recortadas (alfa).'
+                          );
+                        }
+                      } catch (err) {
+                        console.error('[Overlay] Falha ao enviar:', err);
+                        alert('Não consegui enviar a moldura. Veja o console.');
+                      }
+                    }}
+                    className="w-full text-xs text-slate-400 file:mr-2 file:py-1.5 file:px-3 file:rounded-md file:border-0 file:text-[10px] file:font-semibold file:bg-slate-800 file:text-cyan-400 hover:file:bg-slate-700 cursor-pointer"
+                  />
+                  {foregroundUrl && (
+                    <button
+                      onClick={async () => {
+                        try {
+                          await fetch('/api/ingest/foreground', { method: 'DELETE' });
+                        } catch (err) {
+                          console.error('[Overlay] Falha ao remover:', err);
+                        }
+                        setForegroundUrl(null);
+                      }}
+                      className="px-2 py-1.5 bg-red-950/50 text-red-400 hover:text-red-300 hover:bg-red-900/60 rounded text-xs font-medium transition whitespace-nowrap"
+                    >
+                      Remover
+                    </button>
+                  )}
                 </div>
-                <input
-                  type="range"
-                  min="0"
-                  max="20"
-                  step="1"
-                  value={layer.blur}
-                  onChange={(e) => handleBlurChange(layer.id, parseInt(e.target.value))}
-                  className="w-full h-1 bg-slate-700 rounded appearance-none cursor-pointer accent-cyan-400"
-                />
               </div>
             )}
           </div>

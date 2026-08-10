@@ -17,7 +17,10 @@ class MosaicState:
 
     def __init__(self):
         self.config = run_config.load_config()
-        self.run_state: str = "idle"
+        # Restaurado do disco: um restart do backend no meio do evento (ou o
+        # --reload em desenvolvimento) voltava o show para "idle" em silêncio, e
+        # as fotos continuavam chegando sem nunca pousar no telão.
+        self.run_state: str = run_config.load_run_state()
         # Enquanto nenhuma imagem base for enviada, o alvo é um placeholder do
         # tamanho do telão — precisa ser regerado quando a resolução muda.
         self.has_target_image = False
@@ -72,6 +75,10 @@ class MosaicState:
     @property
     def container_shape(self) -> str:
         return str(self.config["gridContainerShape"])
+
+    @property
+    def custom_mask_cells(self) -> list:
+        return self.config.get("customMaskCells", [])
 
     @property
     def layers(self) -> list:
@@ -131,10 +138,10 @@ class MosaicState:
 
         # O contorno define quais células o telão desenha. Sem isso no motor,
         # fotos são alocadas em células invisíveis e somem.
-        if "gridContainerShape" in changed:
-            self.engine.set_container_shape(self.container_shape)
+        if "gridContainerShape" in changed or "customMaskCells" in changed:
+            self.engine.set_container_shape(self.container_shape, getattr(self, "custom_mask_cells", []))
 
-        if needs_regrid or "gridContainerShape" in changed:
+        if needs_regrid or "gridContainerShape" in changed or "customMaskCells" in changed:
             orphans = self.engine.purge_tiles_outside_container()
             if orphans:
                 print(f"[Config] {len(orphans)} ladrilho(s) fora do novo contorno foram liberados.")
@@ -147,6 +154,7 @@ class MosaicState:
         if value not in RUN_STATES:
             raise ValueError(f"run_state inválido: {value}")
         self.run_state = value
+        run_config.save_run_state(value)
         return self.run_state
 
     def reset_mosaic(self):
@@ -154,7 +162,7 @@ class MosaicState:
         self.engine.placed_tiles.clear()
         self.engine.locked_tiles.clear()
         self.queue_manager = QueueManager()
-        self.run_state = "idle"
+        self.set_run_state("idle")
 
     def placed_tiles_payload(self) -> list[dict]:
         """

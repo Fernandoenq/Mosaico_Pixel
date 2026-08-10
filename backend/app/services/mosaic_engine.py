@@ -7,12 +7,13 @@ class MosaicEngine:
     Calcula as cores médias das células em espaço perceptual LAB e aloca
     fotos de forma otimizada com trava de distância de duplicadas.
     """
-    def __init__(self, target_image_bgr: np.ndarray, rows: int = 30, cols: int = 40, container_shape: str = "rectangle"):
+    def __init__(self, target_image_bgr: np.ndarray, rows: int = 30, cols: int = 40, container_shape: str = "rectangle", custom_mask_cells: list = None):
         self.rows = rows
         self.cols = cols
         # Contorno da região do mosaico. O frontend NÃO desenha células fora
         # dele, então alocar uma foto ali equivale a perdê-la.
         self.container_shape = container_shape
+        self.custom_mask_cells = set(custom_mask_cells) if custom_mask_cells else set()
         self.target_image = target_image_bgr
         self.h, self.w = target_image_bgr.shape[:2]
         self.tile_h = self.h // rows
@@ -51,6 +52,8 @@ class MosaicEngine:
             return dx <= 1.01 and dy <= 1.01 and (dx * 0.5 + dy * 0.866 <= 1.01)
         if shape == "circle_mask":
             return dx * dx + dy * dy <= 1.04
+        if shape == "custom_mask":
+            return f"{r}_{c}" in self.custom_mask_cells
         return True
 
     def available_cells(self) -> list[tuple[int, int]]:
@@ -76,8 +79,9 @@ class MosaicEngine:
             self.locked_tiles.discard(cell)
         return orphans
 
-    def set_container_shape(self, shape: str):
+    def set_container_shape(self, shape: str, custom_mask_cells: list = None):
         self.container_shape = shape
+        self.custom_mask_cells = set(custom_mask_cells) if custom_mask_cells else set()
 
     def update_grid(self, target_image_bgr: np.ndarray, rows: int, cols: int):
         self.rows = rows
@@ -122,7 +126,9 @@ class MosaicEngine:
         # telão, então colocar uma foto ali é o mesmo que descartá-la.
         empty_cells = self.available_cells()
 
+        is_full = False
         if not empty_cells:
+            is_full = True
             # Mosaico cheio: reaproveita qualquer célula destravada do contorno
             empty_cells = [
                 (r, c)
@@ -130,11 +136,14 @@ class MosaicEngine:
                 for c in range(self.cols)
                 if (r, c) not in self.locked_tiles and self.cell_in_container(r, c)
             ]
+            if not empty_cells:
+                empty_cells = [(0, 0)]
 
-        if not empty_cells:
-            empty_cells = [(0, 0)]
-
-        if fill_sequence == "top_to_bottom":
+        if is_full:
+            import random
+            best_cell = random.choice(empty_cells)
+            best_score = 0.0
+        elif fill_sequence == "top_to_bottom":
             best_cell = empty_cells[0]
             best_score = 0.0
         elif fill_sequence == "bottom_to_top":

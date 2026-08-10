@@ -179,3 +179,31 @@ cython_debug/
 #  refer to https://docs.cursor.com/context/ignore-files
 .cursorignore
 .cursorindexingignore
+# ─── PICBRAND ARCH — higiene do repositório ──────────────────────────────
+# Dependências: reinstaláveis a partir dos lockfiles, nunca versionadas.
+node_modules/
+frontend/node_modules/
+
+# Mídia do evento: fica no disco da máquina, fora do controle de versão.
+# São gigabytes de fotos e vídeos que não pertencem ao histórico do código.
+Galeria/
+MOSAIC/
+assets/
+video/
+_ref_frames/
+logs/
+*.mp4
+
+# Saídas de execução (o backend recria tudo isso sozinho)
+backend/storage/hot_folder/
+backend/storage/tiles/
+backend/storage/exports/
+backend/storage/print_out/
+backend/storage/foreground.png
+backend/storage/target_base.jpg
+backend/storage/s3_seen.json
+backend/storage/run_state.json
+
+# Caches
+__pycache__/
+.pytest_cache/

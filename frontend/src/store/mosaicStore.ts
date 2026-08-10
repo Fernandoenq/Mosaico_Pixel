@@ -52,14 +52,21 @@ export const RUN_CONFIG_KEYS = [
   'animationDuration',
   'animationEase',
   'centralPreviewDuration',
+  'previewCardScale',
+  'idleReplayEnabled',
+  'idleReplayDelay',
+  'idleReplayInterval',
   'cellFilters',
+  'customMaskCells',
   'selectedBrushFilter',
   'fillSequence',
   'autoDuplicateToFill',
   'duplicateDistLimit',
   'colorStrictness',
   'hotFolderDir',
+  'autoPlaceMode',
   'targetBaseUrl',
+  'foregroundUrl',
   'layers',
 ] as const;
 
@@ -79,16 +86,25 @@ export interface MosaicStore {
   gridThickness: number;
   gridOpacity: number;
   gridShape: 'square' | 'diamond' | 'hexagon' | 'circle';
-  gridContainerShape: 'rectangle' | 'diamond_mask' | 'hexagon_mask' | 'circle_mask' | 'hexagon_halftone' | 'auto_color_mask';
+  gridContainerShape: 'rectangle' | 'diamond_mask' | 'hexagon_mask' | 'circle_mask' | 'hexagon_halftone' | 'auto_color_mask' | 'custom_mask';
 
   // Configurações de Animação & Preview Central
   animationPreset: AnimationPreset;
   animationDuration: number;
   animationEase: string;
   centralPreviewDuration: number;
+  /** Lado do cartao de preview como fracao da altura do telao. */
+  previewCardScale: number;
+  /** Sem foto nova, o telao volta a destacar fotos ja pousadas. */
+  idleReplayEnabled: boolean;
+  /** Segundos sem foto nova ate o modo ocioso comecar. */
+  idleReplayDelay: number;
+  /** Pausa entre um destaque e o proximo. */
+  idleReplayInterval: number;
 
   // Editor de Filtros & Pintura de Áreas na Grade
   cellFilters: Record<string, string>; // key: "r_c" -> filterId ('red' | 'gold' | 'cyan' | 'grayscale' | 'sepia' | 'green' | 'none')
+  customMaskCells: string[]; // ['r_c', 'r_c']
   brushModeActive: boolean;
   selectedBrushFilter: string;
 
@@ -99,7 +115,9 @@ export interface MosaicStore {
   duplicateDistLimit: number;
   colorStrictness: number;
   hotFolderDir: string;
+  autoPlaceMode: boolean;
   targetBaseUrl: string | null;
+  foregroundUrl: string | null;
   
   // State Arrays
   pendingPhotos: PendingPhoto[];
@@ -127,6 +145,7 @@ export interface MosaicStore {
   markConfigApplied: () => void;
   clearMosaic: () => void;
   setTargetBaseUrl: (url: string | null) => void;
+  setForegroundUrl: (url: string | null) => void;
   setScreenSize: (width: number, height: number) => void;
   setGridSettings: (rows: number, cols: number, distLimit: number, strictness: number) => void;
   setGridBounds: (offsetX: number, offsetY: number, width: number, height: number) => void;
@@ -135,10 +154,13 @@ export interface MosaicStore {
   setGridContainerShape: (shape: 'rectangle' | 'diamond_mask' | 'hexagon_mask' | 'circle_mask' | 'hexagon_halftone' | 'auto_color_mask') => void;
   setAnimationConfig: (preset: AnimationPreset, duration: number, ease: string) => void;
   setCentralPreviewDuration: (duration: number) => void;
+  setPreviewCardScale: (scale: number) => void;
+  setIdleReplay: (enabled: boolean, delay: number, interval: number) => void;
   setBrushModeActive: (active: boolean) => void;
   setSelectedBrushFilter: (filterId: string) => void;
   setFillSequence: (seq: 'color_match' | 'top_to_bottom' | 'bottom_to_top' | 'center_out' | 'random') => void;
   setAutoDuplicateToFill: (enabled: boolean) => void;
+  setAutoPlaceMode: (enabled: boolean) => void;
   paintCell: (row: number, col: number, filterId?: string) => void;
   clearCellFilters: () => void;
   setLayers: (layers: Layer[]) => void;
@@ -183,7 +205,7 @@ const sanitizeIncomingConfig = (config: Record<string, unknown>): Partial<RunCon
   RUN_CONFIG_KEYS.forEach((key) => {
     const value = config[key];
     if (value === undefined) return;
-    if (value === null && key !== 'targetBaseUrl') return;
+    if (value === null && key !== 'targetBaseUrl' && key !== 'foregroundUrl') return;
     clean[key] = value;
   });
   return clean as Partial<RunConfig>;
@@ -209,9 +231,14 @@ export const useMosaicStore = create<MosaicStore>()(
       animationPreset: "hsbc_cascade",
       animationDuration: 0.8,
       animationEase: AUTO_EASE,
-      centralPreviewDuration: 0.8,
+      centralPreviewDuration: 10.0,
+      previewCardScale: 1.0,
+      idleReplayEnabled: true,
+      idleReplayDelay: 20,
+      idleReplayInterval: 5,
 
       cellFilters: {},
+      customMaskCells: [],
       brushModeActive: false,
       selectedBrushFilter: "red",
 
@@ -219,9 +246,11 @@ export const useMosaicStore = create<MosaicStore>()(
       autoDuplicateToFill: false,
 
       duplicateDistLimit: 3,
-      colorStrictness: 1.0,
-      hotFolderDir: "storage/hot_folder",
+      colorStrictness: 2.0,
+      hotFolderDir: 'storage/hot_folder',
+      autoPlaceMode: true,
       targetBaseUrl: null,
+      foregroundUrl: null,
 
       pendingPhotos: [],
       approvedPhotos: [],
@@ -262,6 +291,7 @@ export const useMosaicStore = create<MosaicStore>()(
         set({ placedTiles: {}, lockedTiles: new Set(), pendingPhotos: [], approvedPhotos: [] }),
 
       setTargetBaseUrl: (targetBaseUrl) => set({ targetBaseUrl }),
+      setForegroundUrl: (foregroundUrl) => set({ foregroundUrl }),
       // Reescala o enquadramento da grade junto com o palco. Zerar para tela
       // cheia descartaria o posicionamento que o operador ajustou à mão.
       setScreenSize: (screenWidth, screenHeight) =>
@@ -291,13 +321,17 @@ export const useMosaicStore = create<MosaicStore>()(
       setGridContainerShape: (gridContainerShape) => set({ gridContainerShape }),
       setAnimationConfig: (animationPreset, animationDuration, animationEase) => set({ animationPreset, animationDuration, animationEase }),
       setCentralPreviewDuration: (centralPreviewDuration) => set({ centralPreviewDuration }),
+      setPreviewCardScale: (previewCardScale) => set({ previewCardScale }),
+      setIdleReplay: (idleReplayEnabled, idleReplayDelay, idleReplayInterval) =>
+        set({ idleReplayEnabled, idleReplayDelay, idleReplayInterval }),
 
       setBrushModeActive: (brushModeActive) => set({ brushModeActive }),
       setSelectedBrushFilter: (selectedBrushFilter) => set({ selectedBrushFilter }),
       setFillSequence: (fillSequence) => set({ fillSequence }),
-      setAutoDuplicateToFill: (autoDuplicateToFill) => set({ autoDuplicateToFill }),
+      setAutoDuplicateToFill: (enabled) => set({ autoDuplicateToFill: enabled, lastAppliedConfig: null }),
+      setAutoPlaceMode: (enabled) => set({ autoPlaceMode: enabled, lastAppliedConfig: null }),
 
-      paintCell: (row, col, filterId) =>
+      paintCell: (row, col, filterId) => {
         set((state) => {
           const key = `${row}_${col}`;
           const targetFilter = filterId || state.selectedBrushFilter;
@@ -312,7 +346,8 @@ export const useMosaicStore = create<MosaicStore>()(
               [key]: targetFilter,
             },
           };
-        }),
+        });
+      },
 
       clearCellFilters: () => set({ cellFilters: {} }),
 
@@ -388,13 +423,19 @@ export const useMosaicStore = create<MosaicStore>()(
         animationDuration: state.animationDuration,
         animationEase: state.animationEase,
         centralPreviewDuration: state.centralPreviewDuration,
+        previewCardScale: state.previewCardScale,
+        idleReplayEnabled: state.idleReplayEnabled,
+        idleReplayDelay: state.idleReplayDelay,
+        idleReplayInterval: state.idleReplayInterval,
         cellFilters: state.cellFilters,
+        customMaskCells: state.customMaskCells,
         selectedBrushFilter: state.selectedBrushFilter,
         fillSequence: state.fillSequence,
         autoDuplicateToFill: state.autoDuplicateToFill,
         duplicateDistLimit: state.duplicateDistLimit,
         colorStrictness: state.colorStrictness,
         targetBaseUrl: state.targetBaseUrl,
+        foregroundUrl: state.foregroundUrl,
         hotFolderDir: state.hotFolderDir,
         layers: state.layers,
         lastAppliedConfig: state.lastAppliedConfig,

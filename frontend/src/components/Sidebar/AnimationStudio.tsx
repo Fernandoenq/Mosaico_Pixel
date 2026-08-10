@@ -65,9 +65,16 @@ export const AnimationStudio: React.FC = () => {
     animationDuration,
     animationEase,
     centralPreviewDuration,
+    previewCardScale,
+    screenHeight,
     gridShape,
+    idleReplayEnabled,
+    idleReplayDelay,
+    idleReplayInterval,
     setAnimationConfig,
     setCentralPreviewDuration,
+    setPreviewCardScale,
+    setIdleReplay,
   } = useMosaicStore();
 
   const [replayKey, setReplayKey] = useState(0);
@@ -200,12 +207,33 @@ export const AnimationStudio: React.FC = () => {
           <input
             type="range"
             min="0"
-            max="3"
+            max="15"
             step="0.1"
             value={centralPreviewDuration}
             onChange={(e) => setCentralPreviewDuration(parseFloat(e.target.value))}
             className="w-full h-1.5 bg-slate-700 rounded appearance-none cursor-pointer accent-cyan-400"
           />
+        </div>
+
+        <div className="flex flex-col gap-1">
+          <div className="flex justify-between text-xs text-slate-400">
+            <span>Tamanho do Preview</span>
+            <span className="font-mono text-cyan-300">
+              {Math.round(previewCardScale * 100)}% · {Math.round(screenHeight * previewCardScale)}px
+            </span>
+          </div>
+          <input
+            type="range"
+            min="0.3"
+            max="1"
+            step="0.05"
+            value={previewCardScale}
+            onChange={(e) => setPreviewCardScale(parseFloat(e.target.value))}
+            className="w-full h-1.5 bg-slate-700 rounded appearance-none cursor-pointer accent-cyan-400"
+          />
+          <span className="text-[10px] text-slate-500">
+            Fração da altura do telão. Acima de 90% o cartão encosta nas bordas.
+          </span>
         </div>
 
         <div className="flex flex-col gap-1">
@@ -224,6 +252,61 @@ export const AnimationStudio: React.FC = () => {
           <span className="text-[10px] text-slate-500 leading-snug">
             Vale para todos os presets. Em "Automático", cada um usa a curva com que foi desenhado.
           </span>
+        </div>
+      </div>
+
+      {/* MODO OCIOSO: a tela não pode ficar parada nos intervalos da cabine */}
+      <div className="flex flex-col gap-3 bg-slate-800/60 p-3 rounded-lg border border-slate-700/50">
+        <label className="flex items-center justify-between cursor-pointer">
+          <span className="flex items-center gap-1.5 text-xs font-semibold text-slate-300">
+            <RotateCw className="w-4 h-4 text-cyan-400" />
+            Destacar fotos antigas
+          </span>
+          <input
+            type="checkbox"
+            checked={idleReplayEnabled}
+            onChange={(e) => setIdleReplay(e.target.checked, idleReplayDelay, idleReplayInterval)}
+            className="w-4 h-4 accent-cyan-400 cursor-pointer"
+          />
+        </label>
+
+        <span className="text-[10px] text-slate-500 leading-snug">
+          Sem foto nova, o telão sorteia uma foto já no mosaico e a mostra no preview central.
+          Ela volta para a mesma célula — o mosaico não muda.
+        </span>
+
+        <div className={`flex flex-col gap-3 ${idleReplayEnabled ? '' : 'opacity-40 pointer-events-none'}`}>
+          <div className="flex flex-col gap-1">
+            <div className="flex justify-between text-xs text-slate-400">
+              <span>Começa após</span>
+              <span className="font-mono text-cyan-300">{idleReplayDelay.toFixed(0)}s sem foto</span>
+            </div>
+            <input
+              type="range"
+              min="5"
+              max="120"
+              step="5"
+              value={idleReplayDelay}
+              onChange={(e) => setIdleReplay(idleReplayEnabled, parseFloat(e.target.value), idleReplayInterval)}
+              className="w-full h-1.5 bg-slate-700 rounded appearance-none cursor-pointer accent-cyan-400"
+            />
+          </div>
+
+          <div className="flex flex-col gap-1">
+            <div className="flex justify-between text-xs text-slate-400">
+              <span>Intervalo entre destaques</span>
+              <span className="font-mono text-cyan-300">{idleReplayInterval.toFixed(0)}s</span>
+            </div>
+            <input
+              type="range"
+              min="0"
+              max="60"
+              step="1"
+              value={idleReplayInterval}
+              onChange={(e) => setIdleReplay(idleReplayEnabled, idleReplayDelay, parseFloat(e.target.value))}
+              className="w-full h-1.5 bg-slate-700 rounded appearance-none cursor-pointer accent-cyan-400"
+            />
+          </div>
         </div>
       </div>
 
