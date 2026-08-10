@@ -674,6 +674,26 @@ export const PixiViewport: React.FC = () => {
     const opacidadeGrade = displayMode ? gridOpacity : Math.max(0.55, gridOpacity);
     g.lineStyle(gridThickness, hexColor, opacidadeGrade);
 
+    /**
+     * Uma célula só é desenhada se estiver dentro do contorno em vigor.
+     *
+     * `isCellInsideContainerMask` não sabe nada sobre `custom_mask` — ela cai no
+     * `return true` final. Cada forma precisava tratar esse caso, e só losango e
+     * hexágono tratavam: com quadrado ou círculo a grade era desenhada inteira,
+     * ignorando o recorte no logo.
+     */
+    const celulaVisivel = (r: number, c: number, cx: number, cy: number): boolean => {
+      if (gridContainerShape === 'custom_mask') {
+        return customMaskCells.includes(`${r}_${c}`);
+      }
+      return isCellInsideContainerMask(
+        cx, cy, gridOffsetX, gridOffsetY,
+        gridWidth > 0 ? gridWidth : screenWidth,
+        gridHeight > 0 ? gridHeight : screenHeight,
+        gridContainerShape,
+      );
+    };
+
     const gw = gridWidth > 0 ? gridWidth : screenWidth;
     const gh = gridHeight > 0 ? gridHeight : screenHeight;
 
@@ -787,7 +807,7 @@ export const PixiViewport: React.FC = () => {
           const cx = gridOffsetX + c * tileW + rowOffset + tileW / 2;
           const cy = gridOffsetY + r * (tileH * 0.75) + tileH / 2;
 
-          if (!isCellInsideContainerMask(cx, cy, gridOffsetX, gridOffsetY, gw, gh, gridContainerShape)) continue;
+          if (!celulaVisivel(r, c, cx, cy)) continue;
 
           const dx = (cx - boxCenterX) / (rx || 1);
           const dy = (cy - boxCenterY) / (ry || 1);
@@ -806,13 +826,7 @@ export const PixiViewport: React.FC = () => {
           const cx = gridOffsetX + (c + 0.5) * tileW;
           const cy = gridOffsetY + (r + 0.5) * tileH;
 
-          if (gridContainerShape === 'custom_mask') {
-            if (!customMaskCells.includes(`${r}_${c}`)) continue;
-          } else {
-            if (!isCellInsideContainerMask(cx, cy, gridOffsetX, gridOffsetY, gw, gh, gridContainerShape)) {
-              continue;
-            }
-          }
+          if (!celulaVisivel(r, c, cx, cy)) continue;
 
           const hw = tileW / 2;
           const hh = tileH / 2;
@@ -831,13 +845,7 @@ export const PixiViewport: React.FC = () => {
           const cx = gridOffsetX + c * tileW + rowOffset + tileW / 2;
           const cy = gridOffsetY + r * (tileH * 0.75) + tileH / 2;
 
-          if (gridContainerShape === 'custom_mask') {
-            if (!customMaskCells.includes(`${r}_${c}`)) continue;
-          } else {
-            if (!isCellInsideContainerMask(cx, cy, gridOffsetX, gridOffsetY, gw, gh, gridContainerShape)) {
-              continue;
-            }
-          }
+          if (!celulaVisivel(r, c, cx, cy)) continue;
 
           const rad = Math.min(tileW, tileH) / 2;
 
@@ -858,9 +866,7 @@ export const PixiViewport: React.FC = () => {
           const cx = gridOffsetX + (c + 0.5) * tileW;
           const cy = gridOffsetY + (r + 0.5) * tileH;
 
-          if (!isCellInsideContainerMask(cx, cy, gridOffsetX, gridOffsetY, gw, gh, gridContainerShape)) {
-            continue;
-          }
+          if (!celulaVisivel(r, c, cx, cy)) continue;
 
           const rad = Math.min(tileW, tileH) / 2;
           g.drawCircle(cx, cy, rad);
@@ -872,9 +878,7 @@ export const PixiViewport: React.FC = () => {
           const cx = gridOffsetX + (c + 0.5) * tileW;
           const cy = gridOffsetY + (r + 0.5) * tileH;
 
-          if (!isCellInsideContainerMask(cx, cy, gridOffsetX, gridOffsetY, gw, gh, gridContainerShape)) {
-            continue;
-          }
+          if (!celulaVisivel(r, c, cx, cy)) continue;
 
           const x = gridOffsetX + c * tileW;
           const y = gridOffsetY + r * tileH;
