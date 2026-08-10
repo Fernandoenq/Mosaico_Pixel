@@ -192,6 +192,28 @@ def _cell_filters(value: Any, fallback: Any) -> Any:
     return cleaned
 
 
+def _mask_cells(value: Any, fallback: Any) -> Any:
+    """
+    Lista de células "linha_coluna" do contorno personalizado.
+
+    Sem este coercer a chave não estava em COERCERS e o `merge_patch` a
+    descartava calada — o modo `custom_mask` nunca chegava a ser publicado.
+    """
+    if not isinstance(value, list):
+        return fallback
+    limpas: list[str] = []
+    vistas: set[str] = set()
+    for item in value:
+        if not isinstance(item, str) or item in vistas:
+            continue
+        partes = item.split("_")
+        if len(partes) != 2 or not all(p.lstrip("-").isdigit() for p in partes):
+            continue
+        vistas.add(item)
+        limpas.append(item)
+    return limpas
+
+
 def _layers(value: Any, fallback: Any) -> Any:
     if not isinstance(value, list):
         return fallback
@@ -237,6 +259,7 @@ COERCERS: dict[str, Callable[[Any, Any], Any]] = {
     "idleReplayDelay": _float(3.0, 600.0),
     "idleReplayInterval": _float(0.0, 300.0),
     "cellFilters": _cell_filters,
+    "customMaskCells": _mask_cells,
     "selectedBrushFilter": _text,
     "fillSequence": _enum(FILL_SEQUENCES),
     "autoDuplicateToFill": _bool,

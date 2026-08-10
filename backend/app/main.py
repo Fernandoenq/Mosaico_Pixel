@@ -860,6 +860,64 @@ def _limitar(valor: float, minimo: float, maximo: float) -> float:
     return max(minimo, min(maximo, valor))
 
 
+@app.post("/api/mosaic/grade-da-marca")
+async def grade_da_marca(cobertura: float = 0.15):
+    """
+    Recorta a grade no formato do logo.
+
+    Lê o overlay já publicado e marca como válidas apenas as células cujo
+    ladrilho cai sobre uma parte transparente da arte — ou seja, onde a foto
+    realmente vai aparecer. O motor passa a alocar só nessas células, então
+    nenhuma foto é gasta numa posição que ficaria escondida atrás do preto.
+
+    `cobertura` é a fração mínima do ladrilho sob a janela (0 a 1). Valores
+    altos deixam só os losangos cheios; baixos incluem o halftone das pontas.
+    """
+    from app.services import video_marca
+
+    overlay = _caminho_overlay()
+    if overlay is None:
+        raise HTTPException(
+            status_code=409,
+            detail="Nenhum overlay de marca configurado. Suba a arte em Camadas > Logo Overlay.",
+        )
+
+    limite = max(0.0, min(1.0, cobertura))
+    c = state.config
+    _, alfa = video_marca.carregar_overlay(
+        overlay, int(c.get("screenWidth", 1920)), int(c.get("screenHeight", 1080))
+    )
+    encontradas = video_marca.celulas_da_marca(
+        alfa,
+        int(c.get("rows", 38)), int(c.get("cols", 62)),
+        float(c.get("gridOffsetX", 0)), float(c.get("gridOffsetY", 0)),
+        float(c.get("gridWidth", c.get("screenWidth", 1920))),
+        float(c.get("gridHeight", c.get("screenHeight", 1080))),
+    )
+
+    celulas = [f"{r}_{col}" for r, col, fracao in encontradas if fracao >= limite]
+    if not celulas:
+        raise HTTPException(
+            status_code=409,
+            detail=f"Nenhuma célula atingiu {int(limite * 100)}% de cobertura. Reduza a exigência.",
+        )
+
+    config = state.apply_config({
+        "customMaskCells": celulas,
+        "gridContainerShape": "custom_mask",
+    })
+    await broadcast_event("CONFIG_UPDATED", config)
+
+    total = int(c.get("rows", 38)) * int(c.get("cols", 62))
+    print(f"[GradeDaMarca] {len(celulas)} de {total} células no formato do logo")
+    return {
+        "status": "success",
+        "celulas": len(celulas),
+        "total": total,
+        "cobertura_minima": limite,
+    }
+
+
 @app.get("/api/export/video-marca/info")
 async def info_video_marca():
     """

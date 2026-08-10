@@ -17,6 +17,7 @@ export const IngestionPanel: React.FC = () => {
     gridOpacity,
     gridShape,
     gridContainerShape,
+    customMaskCells,
     duplicateDistLimit,
     colorStrictness,
     hotFolderDir,
@@ -50,6 +51,34 @@ export const IngestionPanel: React.FC = () => {
   const [exportProgress, setExportProgress] = useState(0);
   const [exportId, setExportId] = useState<string | null>(null);
   const [exportError, setExportError] = useState<string>('');
+
+  const [coberturaGrade, setCoberturaGrade] = useState(0.05);
+  const [gerandoGrade, setGerandoGrade] = useState(false);
+  const [resultadoGrade, setResultadoGrade] = useState<string>('');
+
+  /**
+   * Recorta a grade no formato do logo. O backend devolve a config nova e o
+   * telão já recebe por WebSocket — aqui só refletimos o resultado no painel.
+   */
+  const handleGradeDaMarca = async () => {
+    setGerandoGrade(true);
+    setResultadoGrade('');
+    try {
+      const res = await fetch(`/api/mosaic/grade-da-marca?cobertura=${coberturaGrade}`, { method: 'POST' });
+      const dados = await res.json();
+      if (!res.ok) throw new Error(dados?.detail || 'Falha ao encaixar a grade');
+      setResultadoGrade(`${dados.celulas} células no formato do logo (de ${dados.total}).`);
+      // Traz a config recém-aplicada para o painel não ficar defasado.
+      const cfg = await fetch('/api/config').then((r) => r.json());
+      useMosaicStore.getState().applyServerConfig(cfg.config);
+      useMosaicStore.getState().markConfigApplied();
+    } catch (err) {
+      setResultadoGrade('');
+      alert(err instanceof Error ? err.message : 'Falha ao encaixar a grade');
+    } finally {
+      setGerandoGrade(false);
+    }
+  };
 
   // Ajustes do vídeo no modelo da marca. Os defaults são os valores aprovados
   // pelo cliente — mexer aqui só muda a exportação, nunca o telão ao vivo.
@@ -543,7 +572,52 @@ export const IngestionPanel: React.FC = () => {
             <span className="text-[11px] font-semibold">Círculos</span>
             <span className="text-[9px] text-slate-400">Dots / Pontos</span>
           </button>
+
+          {/* Ocupa a linha inteira porque não é irmão dos outros quatro: eles
+              mudam o formato do ladrilho, este recorta a REGIÃO no desenho da
+              marca. Fica aqui porque é onde se procura "a forma do logo". */}
+          <button
+            onClick={handleGradeDaMarca}
+            disabled={gerandoGrade}
+            className={`col-span-2 flex flex-col items-center justify-center p-2.5 rounded-lg border transition gap-1 ${
+              gridContainerShape === 'custom_mask'
+                ? 'bg-red-500/20 border-red-400 text-red-200 ring-2 ring-red-500/30'
+                : 'bg-slate-900/60 border-red-900/60 text-slate-400 hover:text-slate-200 hover:bg-slate-800'
+            } disabled:opacity-50`}
+          >
+            <span className="text-base font-bold">◆</span>
+            <span className="text-[11px] font-semibold">
+              {gerandoGrade ? 'Calculando...' : 'Formato do Logo'}
+            </span>
+            <span className="text-[9px] text-slate-400">
+              {gridContainerShape === 'custom_mask'
+                ? `${customMaskCells.length} células no desenho da marca`
+                : 'Recorta a região pelo overlay da Camada 4'}
+            </span>
+          </button>
         </div>
+
+        <label className="flex items-center justify-between text-[10px] text-slate-400">
+          <span>Detalhe do logo</span>
+          <select
+            value={coberturaGrade}
+            onChange={(e) => setCoberturaGrade(parseFloat(e.target.value))}
+            className="bg-slate-900 border border-slate-700 rounded p-1 text-[10px] text-slate-200"
+          >
+            <option value={0.05}>Completo (com os pontinhos)</option>
+            <option value={0.15}>Equilibrado</option>
+            <option value={0.3}>Só os losangos cheios</option>
+          </select>
+        </label>
+
+        {resultadoGrade && <span className="text-[10px] text-emerald-400">{resultadoGrade}</span>}
+
+        <span className="text-[10px] text-slate-500 leading-snug">
+          As quatro primeiras mudam o formato de cada ladrilho. "Formato do Logo"
+          é diferente: recorta a <strong>região</strong> do mosaico no desenho da
+          marca, usando o overlay da Camada 4. Ajuste a grade e a área antes — o
+          recorte é calculado em cima delas.
+        </span>
       </div>
 
       {/* 6. Contorno / Máscara da Área do Mosaico (Bounding Mask Container) */}
