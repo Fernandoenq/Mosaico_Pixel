@@ -53,7 +53,7 @@ export const IngestionPanel: React.FC = () => {
   const [exportError, setExportError] = useState<string>('');
 
   const [coberturaGrade, setCoberturaGrade] = useState(0.05);
-  const [distribuicaoGrade, setDistribuicaoGrade] = useState('espalhado');
+  const [distribuicaoGrade, setDistribuicaoGrade] = useState('aleatorio');
   const [gerandoGrade, setGerandoGrade] = useState(false);
   const [resultadoGrade, setResultadoGrade] = useState<string>('');
 
@@ -628,7 +628,8 @@ export const IngestionPanel: React.FC = () => {
             onChange={(e) => setDistribuicaoGrade(e.target.value)}
             className="bg-slate-900 border border-slate-700 rounded p-1 text-[10px] text-slate-200"
           >
-            <option value="espalhado">Espalhado (logo inteiro desde o início)</option>
+            <option value="aleatorio">Aleatório (espalha sem padrão)</option>
+            <option value="espalhado">Espalhado (rodízio por região)</option>
             <option value="visibilidade">Por visibilidade (do lado mais denso)</option>
           </select>
         </label>

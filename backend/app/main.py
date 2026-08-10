@@ -867,6 +867,27 @@ def _limitar(valor: float, minimo: float, maximo: float) -> float:
 
 
 
+def _ordem_aleatoria(celulas: list[tuple[int, int, float]]) -> list:
+    """
+    Embaralha as células, mas com peso pela cobertura.
+
+    Aleatório puro faria muita foto cair nos pontinhos do halftone logo de
+    cara, onde só se vê um grão. Aqui a chance de vir cedo é proporcional ao
+    quanto o losango preenche o ladrilho: o resultado parece espalhado ao
+    acaso, sem desperdiçar as primeiras fotos nas células piores.
+
+    Amostragem ponderada sem reposição (Efraimidis-Spirakis): a chave
+    `random ** (1/peso)` ordenada decrescente dá exatamente essa distribuição.
+    """
+    import random
+
+    def chave(c):
+        peso = max(0.01, c[2])
+        return random.random() ** (1.0 / peso)
+
+    return sorted(celulas, key=chave, reverse=True)
+
+
 def _ordem_espalhada(celulas: list[tuple[int, int, float]], divisoes: int = 6) -> list:
     """
     Reordena as células para o logo crescer por inteiro em vez de por região.
@@ -927,6 +948,9 @@ async def grade_da_marca(cobertura: float = 0.15, distribuicao: str = "visibilid
       - "espalhado": percorre as regiões do desenho em rodízio, pegando a
         melhor célula de cada uma por vez. O logo inteiro se insinua desde as
         primeiras fotos, ao custo de usar células menos cobertas mais cedo.
+      - "aleatorio": sorteia a ordem com peso pela cobertura. Espalha por todo
+        o desenho sem padrão perceptível, mas ainda favorece os losangos
+        cheios, então as primeiras fotos não caem só nos pontinhos.
     """
     from app.services import video_marca
 
@@ -951,7 +975,9 @@ async def grade_da_marca(cobertura: float = 0.15, distribuicao: str = "visibilid
     )
 
     validas = [c for c in encontradas if c[2] >= limite]
-    if distribuicao == "espalhado":
+    if distribuicao == "aleatorio":
+        validas = _ordem_aleatoria(validas)
+    elif distribuicao == "espalhado":
         validas = _ordem_espalhada(validas)
     else:
         # Da célula mais coberta pela arte para a menos coberta: as primeiras
