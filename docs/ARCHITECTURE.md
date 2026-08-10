@@ -71,6 +71,30 @@ Pontos que já custaram caro e estão documentados no código:
 - As chaves já importadas do S3 são **persistidas** em `storage/s3_seen.json`;
   sem isso, todo restart reimportava o bucket inteiro.
 
+## 4.1 Enchendo o mosaico
+
+O desenho da marca tem mais células do que gente na fila. Três caminhos fecham
+a diferença, e eles se somam:
+
+| Caminho | Rota | Comportamento |
+| --- | --- | --- |
+| Duplicação gradual | `PUT /api/config {autoDuplicateToFill}` | Laço no backend copia em rodízio as fotos já pousadas. Cada cópia sai por `TILE_PLACED`, com a animação de foto nova. Quem chega no meio do evento entra no rodízio. |
+| Preenchimento imediato | `POST /api/mosaic/auto-fill-duplicates` | Fecha tudo de uma vez, sem animação. Para a foto oficial e a gravação do vídeo. |
+| Desfazer | `POST /api/mosaic/remove-duplicates` | Apaga só os ladrilhos com sufixo `_dup_` e emite `TILES_REMOVED`. As fotos reais ficam. |
+
+O ritmo NÃO é o valor cru de `duplicateIntervalSeconds`: o laço soma o tempo que
+o telão leva para exibir a cópia anterior (hold do preview + voo + respiro).
+Sem isso ele soltava uma cópia a cada 3s enquanto cada uma leva uns 12s na
+tela, e a fila crescia sem fim.
+
+O **miolo da marca** (`POST /api/mosaic/abrir-miolo-da-marca`) estende a malha
+de losangos para dentro da chapa preta do meio do logo: recorta um losango por
+célula vaga do contorno e soma essas células à máscara, sem pintura — a foto
+fica na cor original. Os respiros do halftone não são tapados (blocos contínuos
+sim, células soltas não), senão o degradê da ponta da marca some. A arte
+original vai para `foreground_sem_miolo.png` e
+`POST /api/mosaic/restaurar-marca-original` a devolve.
+
 ## 5. Configuração (RunConfig)
 
 Fonte única da verdade, em `backend/app/core/run_config.py`, espelhada em
