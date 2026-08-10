@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { useMosaicStore } from '../../store/mosaicStore';
-import { Monitor, Grid, FolderOpen, Image as ImageIcon, Upload, Check, Sliders, Move, Save } from 'lucide-react';
+import { Monitor, Grid, FolderOpen, Image as ImageIcon, Upload, Check, Sliders, Move, Save, Trash2 } from 'lucide-react';
 
 export const IngestionPanel: React.FC = () => {
   const {
@@ -194,6 +194,51 @@ export const IngestionPanel: React.FC = () => {
       alert(err instanceof Error ? err.message : 'Falha ao encaixar a grade');
     } finally {
       setGerandoGrade(false);
+    }
+  };
+
+  const [limpando, setLimpando] = useState(false);
+  const [confirmandoLimpeza, setConfirmandoLimpeza] = useState(false);
+  const [limparBucket, setLimparBucket] = useState(false);
+  const [resultadoLimpeza, setResultadoLimpeza] = useState<{ texto: string; erro: boolean } | null>(null);
+
+  /**
+   * Limpeza geral entre um evento e outro.
+   *
+   * Exige dois cliques: o primeiro arma, o segundo executa. É a única ação do
+   * painel que apaga foto de verdade — um clique errado no meio do evento não
+   * tem volta, e a barra fica ao alcance do mouse o tempo todo.
+   */
+  const handleLimpezaGeral = async () => {
+    if (!confirmandoLimpeza) {
+      setConfirmandoLimpeza(true);
+      window.setTimeout(() => setConfirmandoLimpeza(false), 5000);
+      return;
+    }
+    setConfirmandoLimpeza(false);
+    setLimpando(true);
+    setResultadoLimpeza(null);
+    try {
+      const res = await fetch(`/api/admin/limpeza-geral?bucket=${limparBucket}&galeria=true`, { method: 'POST' });
+      const dados = await res.json();
+      if (!res.ok) throw new Error(dados?.detail || 'Falha na limpeza');
+      const d = dados.disco || {};
+      const partes = Object.entries(d).map(
+        ([nome, v]: [string, any]) => `${nome}: ${v.arquivos} (${v.mb} MB)`,
+      );
+      if (limparBucket) {
+        partes.push(
+          dados.bucket?.ok
+            ? `bucket: ${dados.bucket.apagados} objetos`
+            : `bucket: FALHOU — ${dados.bucket?.detalhe || dados.bucket?.falhas?.join(', ')}`,
+        );
+      }
+      setResultadoLimpeza({ erro: false, texto: `Limpo — ${partes.join(' · ')}.` });
+      useMosaicStore.getState().clearMosaic();
+    } catch (err) {
+      setResultadoLimpeza({ erro: true, texto: err instanceof Error ? err.message : 'Falha na limpeza' });
+    } finally {
+      setLimpando(false);
     }
   };
 
@@ -1372,6 +1417,65 @@ export const IngestionPanel: React.FC = () => {
               Tentar Novamente
             </button>
           </div>
+        )}
+      </div>
+
+      {/* Zona de risco: fica no FIM do painel, longe dos controles do evento. */}
+      <div className="flex flex-col gap-2 bg-rose-950/30 p-3 rounded-lg border border-rose-900/60">
+        <div className="flex items-center gap-1.5 text-xs font-bold text-rose-300">
+          <Trash2 className="w-4 h-4 text-rose-400" />
+          <span>Limpeza Geral</span>
+        </div>
+
+        <p className="text-[10px] text-slate-400 leading-snug">
+          Zera o evento: mosaico, fila, ladrilhos, hot folder e a galeria.
+          <strong className="text-slate-300"> Não mexe</strong> na configuração
+          nem nos arquivos da marca — overlay, imagem-base, encaixe da grade e
+          vídeos exportados ficam.
+        </p>
+
+        <label className="flex items-center gap-2 text-[10px] text-slate-300 cursor-pointer">
+          <input
+            type="checkbox"
+            checked={limparBucket}
+            onChange={(e) => setLimparBucket(e.target.checked)}
+            disabled={limpando}
+            className="w-3.5 h-3.5 accent-rose-500 cursor-pointer"
+          />
+          <span>
+            Esvaziar também o bucket S3
+            <span className="text-rose-400/80"> (não tem volta)</span>
+          </span>
+        </label>
+
+        <button
+          onClick={handleLimpezaGeral}
+          disabled={limpando}
+          className={`w-full font-bold text-xs py-2 rounded-lg transition border active:scale-95 ${
+            limpando
+              ? 'bg-slate-800 text-slate-500 border-slate-700'
+              : confirmandoLimpeza
+                ? 'bg-rose-500 hover:bg-rose-400 text-white border-rose-300'
+                : 'bg-rose-900/60 hover:bg-rose-800/70 text-rose-200 border-rose-700'
+          }`}
+        >
+          {limpando
+            ? 'Limpando...'
+            : confirmandoLimpeza
+              ? 'Confirmar — apagar tudo agora'
+              : '🗑 Limpeza geral'}
+        </button>
+
+        {confirmandoLimpeza && !limpando && (
+          <span className="text-[10px] text-amber-400">
+            Clique de novo para confirmar. A confirmação expira em 5s.
+          </span>
+        )}
+
+        {resultadoLimpeza && (
+          <span className={`text-[10px] leading-snug ${resultadoLimpeza.erro ? 'text-rose-400' : 'text-emerald-400'}`}>
+            {resultadoLimpeza.texto}
+          </span>
         )}
       </div>
 

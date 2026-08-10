@@ -87,6 +87,21 @@ class S3Watcher:
                 
             time.sleep(self.poll_interval)
 
+    def esquecer_tudo(self):
+        """
+        Esquece as chaves já importadas, em memória e em disco.
+
+        Apagar só o arquivo não bastava: `seen_keys` é carregado uma única vez,
+        na construção, e o watcher segue rodando com a lista antiga na memória
+        — o bucket novo nunca seria reimportado sem reiniciar o backend.
+        """
+        with self._state_lock:
+            self.seen_keys = set()
+            try:
+                self.state_path.unlink(missing_ok=True)
+            except OSError as e:
+                print(f"[S3Watcher] Falha ao apagar o estado: {e}")
+
     def _load_seen(self) -> set:
         try:
             with self.state_path.open("r", encoding="utf-8") as handle:

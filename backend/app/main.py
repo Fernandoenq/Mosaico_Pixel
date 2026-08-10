@@ -1215,6 +1215,51 @@ async def grade_da_marca(cobertura: float = 0.15, distribuicao: str = "visibilid
     }
 
 
+@app.post("/api/admin/limpeza-geral")
+async def limpeza_geral(bucket: bool = False, galeria: bool = True):
+    """
+    Zera o evento: mosaico, filas, ladrilhos, hot folder e — se pedido — a
+    galeria e o bucket S3.
+
+    NÃO mexe na configuração nem nos arquivos da marca (overlay, imagem-base,
+    fallbacks, vídeos exportados). Refazer o encaixe da grade é justamente o
+    trabalho que não dá para repetir com o cliente esperando.
+
+    O bucket é opcional e vem desligado: apagar o que está na nuvem é a única
+    parte que não dá para refazer com uma nova bateria de fotos.
+    """
+    from app.services import limpeza
+
+    # O watcher é parado ANTES: com ele de pé, os arquivos que ainda estão na
+    # hot folder voltariam a ser ingeridos no meio da faxina e o evento novo já
+    # começaria com foto do anterior.
+    hot_folder_watcher.stop()
+    s3_watcher.stop()
+    try:
+        if bucket:
+            resultado_bucket = limpeza.esvaziar_bucket()
+        else:
+            resultado_bucket = {"ok": True, "detalhe": "Bucket preservado."}
+
+        disco = limpeza.limpar_disco(
+            settings.STORAGE_DIR,
+            settings.BASE_DIR.parent / "Galeria",
+            galeria,
+        )
+
+        s3_watcher.esquecer_tudo()
+        state.reset_mosaic()
+        state.tile_urls.clear()
+    finally:
+        # Mesmo se algo falhar, o sistema não pode ficar sem ingestão.
+        hot_folder_watcher.start()
+        s3_watcher.start()
+
+    await broadcast_event("MOSAIC_RESET", {})
+    print(f"[Limpeza] disco={disco} bucket={resultado_bucket}")
+    return {"status": "success", "disco": disco, "bucket": resultado_bucket}
+
+
 @app.post("/api/mosaic/abrir-miolo-da-marca")
 async def abrir_miolo_da_marca():
     """
