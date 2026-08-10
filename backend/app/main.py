@@ -1215,6 +1215,99 @@ async def grade_da_marca(cobertura: float = 0.15, distribuicao: str = "visibilid
     }
 
 
+@app.post("/api/mosaic/abrir-miolo-da-marca")
+async def abrir_miolo_da_marca():
+    """
+    Estende a malha de losangos para dentro do miolo da marca.
+
+    Na arte o miolo é chapa preta: o telão cobre o mosaico ali e nenhuma foto
+    aparece. Aqui recortamos um losango em cada célula vaga do contorno e
+    somamos essas células à máscara, no FIM da lista — assim a sequência
+    "brand_first" continua enchendo primeiro os losangos originais do desenho.
+
+    As células novas não recebem pintura: sem filtro, a foto fica na cor
+    original. O contorno da marca segue tingido, e o miolo vira a área onde as
+    pessoas se veem como são.
+    """
+    from app.services import meio_da_marca
+
+    overlay = _caminho_overlay()
+    if overlay is None:
+        raise HTTPException(
+            status_code=409,
+            detail="Nenhum overlay de marca configurado. Suba a arte em Camadas > Logo Overlay.",
+        )
+
+    c = state.config
+    if c.get("gridContainerShape") != "custom_mask" or not c.get("customMaskCells"):
+        raise HTTPException(
+            status_code=409,
+            detail="Recorte a grade no formato do logo antes: use 'Formato do Logo'.",
+        )
+
+    rows, cols = int(c["rows"]), int(c["cols"])
+    atuais = list(c["customMaskCells"])
+    novas = meio_da_marca.celulas_do_miolo(atuais, rows, cols)
+    if not novas:
+        return {"status": "success", "novas": 0, "detalhe": "O miolo já está aberto."}
+
+    # Backup antes de sobrescrever: a arte veio do cliente e o recorte é
+    # destrutivo — sem cópia, refazer significaria pedir o arquivo de novo.
+    original = overlay.with_name(f"{overlay.stem}_sem_miolo{overlay.suffix}")
+    if not original.exists():
+        original.write_bytes(overlay.read_bytes())
+
+    recortados = meio_da_marca.recortar_losangos(
+        original, overlay, novas, rows, cols,
+        float(c.get("gridOffsetX", 0)), float(c.get("gridOffsetY", 0)),
+        float(c.get("gridWidth", c.get("screenWidth", 1920))),
+        float(c.get("gridHeight", c.get("screenHeight", 1080))),
+        int(c.get("screenWidth", 1920)), int(c.get("screenHeight", 1080)),
+    )
+
+    # As células do miolo entram sem pintura: cor original.
+    filtros = {k: v for k, v in (c.get("cellFilters") or {}).items() if k not in set(novas)}
+
+    url = f"/storage/{overlay.name}?t={uuid.uuid4().hex[:8]}"
+    config = state.apply_config({
+        "customMaskCells": atuais + novas,
+        "cellFilters": filtros,
+        "foregroundUrl": url,
+    })
+    await broadcast_event("CONFIG_UPDATED", config)
+
+    print(f"[MioloDaMarca] {recortados} losango(s) abertos; máscara agora com {len(atuais) + len(novas)} células.")
+    return {
+        "status": "success",
+        "novas": len(novas),
+        "recortados": recortados,
+        "mascara": len(atuais) + len(novas),
+        "url": url,
+    }
+
+
+@app.post("/api/mosaic/restaurar-marca-original")
+async def restaurar_marca_original():
+    """Desfaz a abertura do miolo: volta à arte como o cliente entregou."""
+    overlay = _caminho_overlay()
+    if overlay is None:
+        raise HTTPException(status_code=409, detail="Nenhum overlay configurado.")
+
+    original = overlay.with_name(f"{overlay.stem}_sem_miolo{overlay.suffix}")
+    if not original.exists():
+        raise HTTPException(status_code=409, detail="Não há arte original guardada — o miolo nunca foi aberto.")
+
+    overlay.write_bytes(original.read_bytes())
+    url = f"/storage/{overlay.name}?t={uuid.uuid4().hex[:8]}"
+    config = state.apply_config({"foregroundUrl": url})
+    await broadcast_event("CONFIG_UPDATED", config)
+    return {
+        "status": "success",
+        "url": url,
+        "detalhe": "Arte restaurada. Reencaixe a grade em 'Formato do Logo' para tirar as células do miolo.",
+    }
+
+
 @app.get("/api/export/video-marca/info")
 async def info_video_marca():
     """

@@ -197,6 +197,38 @@ export const IngestionPanel: React.FC = () => {
     }
   };
 
+  /**
+   * Abre o miolo da marca (ou devolve a arte como veio do cliente).
+   *
+   * As duas ações mexem no MESMO arquivo de overlay e na máscara, então
+   * compartilham o estado de "ocupado" e a mesma linha de resultado.
+   */
+  const handleMiolo = async (abrir: boolean) => {
+    setGerandoGrade(true);
+    setResultadoGrade('');
+    try {
+      const rota = abrir ? '/api/mosaic/abrir-miolo-da-marca' : '/api/mosaic/restaurar-marca-original';
+      const res = await fetch(rota, { method: 'POST' });
+      const dados = await res.json();
+      if (!res.ok) throw new Error(dados?.detail || 'Falha ao mudar o miolo da marca');
+      setResultadoGrade(
+        abrir
+          ? dados.novas === 0
+            ? 'O miolo já estava aberto.'
+            : `${dados.novas} célula(s) abertas no miolo, na cor original. Máscara com ${dados.mascara}.`
+          : dados.detalhe || 'Arte restaurada.',
+      );
+      const cfg = await fetch('/api/config').then((r) => r.json());
+      useMosaicStore.getState().applyServerConfig(cfg.config);
+      useMosaicStore.getState().markConfigApplied();
+    } catch (err) {
+      setResultadoGrade('');
+      alert(err instanceof Error ? err.message : 'Falha ao mudar o miolo da marca');
+    } finally {
+      setGerandoGrade(false);
+    }
+  };
+
   // Ajustes do vídeo no modelo da marca. Os defaults são os valores aprovados
   // pelo cliente — mexer aqui só muda a exportação, nunca o telão ao vivo.
   const RESOLUCOES = [
@@ -749,6 +781,27 @@ export const IngestionPanel: React.FC = () => {
             <option value="visibilidade">Por visibilidade (do lado mais denso)</option>
           </select>
         </label>
+
+        {/* O miolo da arte é chapa preta e nenhuma foto aparece ali. Aqui a
+            malha de losangos é estendida para dentro dele. */}
+        <div className="flex gap-1.5">
+          <button
+            onClick={() => handleMiolo(true)}
+            disabled={gerandoGrade}
+            title="Recorta losangos no miolo preto da marca e libera essas células. As fotos do miolo ficam na cor original."
+            className="flex-1 bg-slate-700/70 hover:bg-slate-600/70 disabled:bg-slate-800 disabled:text-slate-600 text-slate-200 font-semibold text-[10px] py-1.5 rounded-lg transition border border-slate-600 active:scale-95"
+          >
+            ◇ Abrir o miolo (cor original)
+          </button>
+          <button
+            onClick={() => handleMiolo(false)}
+            disabled={gerandoGrade}
+            title="Volta a arte como o cliente entregou. Depois reencaixe em Formato do Logo."
+            className="bg-slate-800 hover:bg-slate-700 disabled:text-slate-600 text-slate-400 text-[10px] px-2 py-1.5 rounded-lg transition border border-slate-700 active:scale-95"
+          >
+            Desfazer
+          </button>
+        </div>
 
         {resultadoGrade && <span className="text-[10px] text-emerald-400">{resultadoGrade}</span>}
 
