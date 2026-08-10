@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Play, Pause, Square, RotateCcw, UploadCloud, Check, AlertTriangle, ExternalLink, Wifi, WifiOff } from 'lucide-react';
+import { Play, Pause, Square, RotateCcw, UploadCloud, Check, AlertTriangle, ExternalLink, Wifi, WifiOff, Eye, EyeOff } from 'lucide-react';
 import { configSignature, pickRunConfig, RunState, useMosaicStore } from '../store/mosaicStore';
 import { fetchRunConfig, pushRunConfig, runTransport, TransportAction } from '../lib/api';
 
@@ -26,7 +26,8 @@ export const TransportBar: React.FC = () => {
   const socketConnected = useMosaicStore((s) => s.socketConnected);
   const signature = useMosaicStore(configSignature);
   const lastApplied = useMosaicStore((s) => s.lastAppliedConfig);
-  const { setRunState, applyServerConfig, markConfigApplied, clearMosaic } = useMosaicStore();
+  const centralPreviewEnabled = useMosaicStore((s) => s.centralPreviewEnabled);
+  const { setRunState, applyServerConfig, markConfigApplied, clearMosaic, setCentralPreviewEnabled } = useMosaicStore();
 
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -43,6 +44,35 @@ export const TransportBar: React.FC = () => {
       })
       .catch(() => setError('Backend offline — inicie o servidor em :8000'));
   }, []);
+
+  /**
+   * Publica SÓ o estado do preview, direto na API.
+   *
+   * Passar pelo "Aplicar" arrastaria junto qualquer rascunho ainda não
+   * publicado das outras abas — e desligar o preview no meio de um ajuste não
+   * pode ter esse efeito colateral.
+   */
+  const handleTogglePreview = async () => {
+    const novoValor = !centralPreviewEnabled;
+    setBusy('preview');
+    setError(null);
+    try {
+      const res = await fetch('/api/config', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ centralPreviewEnabled: novoValor }),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      setCentralPreviewEnabled(novoValor);
+      // Mantém a assinatura em dia: o valor já está publicado, então o painel
+      // não deve passar a acusar "alterações não aplicadas" por causa dele.
+      markConfigApplied();
+    } catch (err) {
+      setError(`Falha ao alternar o preview: ${err instanceof Error ? err.message : err}`);
+    } finally {
+      setBusy(null);
+    }
+  };
 
   const handleApply = async () => {
     setBusy('apply');
@@ -180,6 +210,29 @@ export const TransportBar: React.FC = () => {
       >
         <RotateCcw className="w-4 h-4" />
         Reset
+      </button>
+
+      <div className="w-px h-6 bg-slate-800" />
+
+      {/* Liga/desliga o cartão central. Publica sozinho, sem passar pelo
+          "Aplicar": é um controle de operação durante o ajuste, não parte da
+          configuração que se monta antes do evento. */}
+      <button
+        onClick={handleTogglePreview}
+        disabled={disabled || busy === 'preview'}
+        title={
+          centralPreviewEnabled
+            ? 'Desligar o preview central — a foto vai direto para a célula'
+            : 'Religar o preview central'
+        }
+        className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold border transition active:scale-95 disabled:opacity-50 ${
+          centralPreviewEnabled
+            ? 'bg-cyan-600 hover:bg-cyan-500 text-white border-cyan-400/40'
+            : 'bg-slate-800 hover:bg-slate-700 text-slate-400 border-slate-600'
+        }`}
+      >
+        {centralPreviewEnabled ? <Eye className="w-4 h-4" /> : <EyeOff className="w-4 h-4" />}
+        {busy === 'preview' ? '...' : centralPreviewEnabled ? 'Preview' : 'Preview off'}
       </button>
 
       <div className="flex-1" />
