@@ -97,6 +97,8 @@ def gerar_video_marca(
     hold_central: float = 0.5,
     duracao_voo: float = 0.6,
     segundos_finais: float = 3.0,
+    duracao_saida: float = 2.0,
+    modo_saida: str = "dispersar",
     cor_marca: tuple[int, int, int] = (28, 28, 226),  # BGR do vermelho HSBC
     ordem: str = "linha",
     progresso: Callable[[int], None] | None = None,
@@ -129,14 +131,11 @@ def gerar_video_marca(
         alvos.sort(key=lambda a: math.hypot(a[1] - cx_grade, a[0] - cy_grade))
     else:
         # Linha a linha, de cima para baixo — o mesmo desenho que o telão faz
-        # ao vivo. O vídeo tem que ser o registro do que aconteceu na tela, não
-        # uma segunda coreografia.
+        # ao vivo.
         alvos.sort(key=lambda a: (a[0], a[1]))
 
     # Quais células saem TINGIDAS. A pintura do painel manda: célula pintada
-    # entra na cor da marca, célula sem pintura entra na cor original — é a
-    # mesma regra do telão, e é o que deixa o miolo do logo com as fotos como
-    # elas são. Sem nenhuma pintura definida, tinge tudo (comportamento antigo).
+    # entra na cor da marca, célula sem pintura entra na cor original.
     pintadas = set((config.get("cellFilters") or {}).keys())
     tinge_tudo = not pintadas
 
@@ -163,7 +162,9 @@ def gerar_video_marca(
     if not cache_tile:
         raise ValueError("Nenhuma das fotos pôde ser lida.")
 
-    total_secs = len(alvos) * intervalo_entre_fotos + hold_central + duracao_voo + segundos_finais
+    t_entrada_fim = len(alvos) * intervalo_entre_fotos + hold_central + duracao_voo
+    t_saida_inicio = t_entrada_fim + segundos_finais
+    total_secs = t_saida_inicio + (duracao_saida if modo_saida != "nenhum" else 0.0)
     total_frames = int(total_secs * fps)
 
     saida.parent.mkdir(parents=True, exist_ok=True)
@@ -175,58 +176,128 @@ def gerar_video_marca(
     pousadas = np.zeros((altura, largura, 3), dtype=np.float32)
     proxima = 0
     ultimo_progresso = -1
+    dist_max = math.hypot(largura, altura)
 
     try:
         for f_idx in range(total_frames):
             t = f_idx / fps
 
-            # Fotos cujo voo já terminou entram de vez na camada de pousadas.
-            while proxima < len(alvos):
-                r, c, _ = alvos[proxima]
-                t_pouso = proxima * intervalo_entre_fotos + hold_central + duracao_voo
-                if t < t_pouso:
-                    break
-                banco = cache_tile if (tinge_tudo or f"{r}_{c}" in pintadas) else cache_tile_original
-                tile = banco[proxima % len(banco)]
-                y0 = int(round(offy + r * th))
-                x0 = int(round(offx + c * tw))
-                y1, x1 = y0 + tile.shape[0], x0 + tile.shape[1]
-                ys0, xs0 = max(0, y0), max(0, x0)
-                ys1, xs1 = min(altura, y1), min(largura, x1)
-                if ys1 > ys0 and xs1 > xs0:
-                    pousadas[ys0:ys1, xs0:xs1] = tile[ys0 - y0:ys1 - y0, xs0 - x0:xs1 - x0]
-                proxima += 1
+            if modo_saida != "nenhum" and t >= t_saida_inicio:
+                # 💥 FASE 3: ANIMAÇÃO DE SAÍDA (MOSAIC OUTRO / DISPERSAR)
+                t_exit = t - t_saida_inicio
+                p_geral = min(1.0, t_exit / max(0.1, duracao_saida))
+                
+                # Fundo preto para composicao
+                frame = np.zeros((altura, largura, 3), dtype=np.float32)
+                
+                if modo_saida == "dispersar":
+                    for i, (r, c, _) in enumerate(alvos):
+                        banco = cache_tile if (tinge_tudo or f"{r}_{c}" in pintadas) else cache_tile_original
+                        tile = banco[i % len(banco)]
+                        
+                        tx = offx + c * tw
+                        ty = offy + r * th
+                        cx_tile = tx + tw / 2.0
+                        cy_tile = ty + th / 2.0
+                        
+                        dx = cx_tile - centro_x
+                        dy = cy_tile - centro_y
+                        d = math.hypot(dx, dy) or 1.0
+                        
+                        delay = (1.0 - min(1.0, d / (dist_max / 2.0))) * 0.35
+                        dt_tile = max(0.0, t_exit - delay)
+                        dur_efetiva = max(0.2, duracao_saida - 0.35)
+                        p_tile = ease_out_cubic(min(1.0, dt_tile / dur_efetiva))
+                        
+                        if p_tile >= 1.0:
+                            continue
+                            
+                        # Deslocamento radial para fora da tela
+                        x_now = int(round(tx + (dx / d) * dist_max * p_tile))
+                        y_now = int(round(ty + (dy / d) * dist_max * p_tile))
+                        alpha_tile = 1.0 - p_tile
+                        
+                        th_tile, tw_tile = tile.shape[:2]
+                        ys0, xs0 = max(0, y_now), max(0, x_now)
+                        ys1, xs1 = min(altura, y_now + th_tile), min(largura, x_now + tw_tile)
+                        if ys1 > ys0 and xs1 > xs0:
+                            sub_tile = tile[ys0 - y_now:ys1 - y_now, xs0 - x_now:xs1 - x_now].astype(np.float32) * alpha_tile
+                            frame[ys0:ys1, xs0:xs1] = np.maximum(frame[ys0:ys1, xs0:xs1], sub_tile)
+                            
+                    # Overlay esvanecendo junto da dispersao
+                    alfa_saida = alfa * (1.0 - p_geral)
+                    frame = frame * (1.0 - alfa_saida) + overlay_bgr * alfa_saida
+                else: # retorno
+                    p_ret = ease_out_cubic(min(1.0, t_exit / max(0.1, duracao_saida)))
+                    for i, (r, c, _) in enumerate(alvos):
+                        banco = cache_tile if (tinge_tudo or f"{r}_{c}" in pintadas) else cache_tile_original
+                        tile = banco[i % len(banco)]
+                        tx = offx + c * tw + tw / 2.0
+                        ty = offy + r * th + th / 2.0
+                        cx_now = tx + (centro_x - tx) * p_ret
+                        cy_now = ty + (centro_y - ty) * p_ret
+                        lado_now = max(2, int(round(tw + (lado_central - tw) * p_ret)))
+                        alpha_ret = 1.0 - (p_ret ** 2)
+                        
+                        res = cv2.resize(tile, (lado_now, lado_now), interpolation=cv2.INTER_AREA).astype(np.float32) * alpha_ret
+                        x0 = int(round(cx_now - lado_now / 2))
+                        y0 = int(round(cy_now - lado_now / 2))
+                        xs0, ys0 = max(0, x0), max(0, y0)
+                        xs1, ys1 = min(largura, x0 + lado_now), min(altura, y0 + lado_now)
+                        if xs1 > xs0 and ys1 > ys0:
+                            frame[ys0:ys1, xs0:xs1] = np.maximum(frame[ys0:ys1, xs0:xs1], res[ys0 - y0:ys1 - y0, xs0 - x0:xs1 - x0])
+                    alfa_saida = alfa * (1.0 - p_ret)
+                    frame = frame * (1.0 - alfa_saida) + overlay_bgr * alfa_saida
 
-            frame = pousadas.copy()
+                escritor.write(np.clip(frame, 0, 255).astype(np.uint8))
+            else:
+                # 🌟 FASE 1 & 2: ENTRADA E HOLD CENTRAL
+                while proxima < len(alvos):
+                    r, c, _ = alvos[proxima]
+                    t_pouso = proxima * intervalo_entre_fotos + hold_central + duracao_voo
+                    if t < t_pouso:
+                        break
+                    banco = cache_tile if (tinge_tudo or f"{r}_{c}" in pintadas) else cache_tile_original
+                    tile = banco[proxima % len(banco)]
+                    y0 = int(round(offy + r * th))
+                    x0 = int(round(offx + c * tw))
+                    y1, x1 = y0 + tile.shape[0], x0 + tile.shape[1]
+                    ys0, xs0 = max(0, y0), max(0, x0)
+                    ys1, xs1 = min(altura, y1), min(largura, x1)
+                    if ys1 > ys0 and xs1 > xs0:
+                        pousadas[ys0:ys1, xs0:xs1] = tile[ys0 - y0:ys1 - y0, xs0 - x0:xs1 - x0]
+                    proxima += 1
 
-            # Overlay da marca por cima: recorta o que aparece e traz os textos.
-            frame = frame * (1.0 - alfa) + overlay_bgr * alfa
+                frame = pousadas.copy()
 
-            # A foto em trânsito fica acima de tudo, em cores originais.
-            for i in range(proxima, len(alvos)):
-                t_inicio = i * intervalo_entre_fotos
-                if t < t_inicio:
-                    break
-                r, c, _ = alvos[i]
-                dt = t - t_inicio
-                p = 0.0 if dt < hold_central else ease_out_cubic(min(1.0, (dt - hold_central) / duracao_voo))
+                # Overlay da marca por cima: recorta o que aparece e traz os textos.
+                frame = frame * (1.0 - alfa) + overlay_bgr * alfa
 
-                grande = cache_grande[i % len(cache_grande)]
-                alvo_x = offx + c * tw + tw / 2
-                alvo_y = offy + r * th + th / 2
-                lado_agora = max(2, int(round(lado_central + (tw - lado_central) * p)))
-                cx = centro_x + (alvo_x - centro_x) * p
-                cy = centro_y + (alvo_y - centro_y) * p
+                # A foto em trânsito fica acima de tudo, em cores originais.
+                for i in range(proxima, len(alvos)):
+                    t_inicio = i * intervalo_entre_fotos
+                    if t < t_inicio:
+                        break
+                    r, c, _ = alvos[i]
+                    dt = t - t_inicio
+                    p = 0.0 if dt < hold_central else ease_out_cubic(min(1.0, (dt - hold_central) / duracao_voo))
 
-                voando = cv2.resize(grande, (lado_agora, lado_agora), interpolation=cv2.INTER_AREA)
-                x0 = int(round(cx - lado_agora / 2))
-                y0 = int(round(cy - lado_agora / 2))
-                xs0, ys0 = max(0, x0), max(0, y0)
-                xs1, ys1 = min(largura, x0 + lado_agora), min(altura, y0 + lado_agora)
-                if xs1 > xs0 and ys1 > ys0:
-                    frame[ys0:ys1, xs0:xs1] = voando[ys0 - y0:ys1 - y0, xs0 - x0:xs1 - x0]
+                    grande = cache_grande[i % len(cache_grande)]
+                    alvo_x = offx + c * tw + tw / 2
+                    alvo_y = offy + r * th + th / 2
+                    lado_agora = max(2, int(round(lado_central + (tw - lado_central) * p)))
+                    cx = centro_x + (alvo_x - centro_x) * p
+                    cy = centro_y + (alvo_y - centro_y) * p
 
-            escritor.write(np.clip(frame, 0, 255).astype(np.uint8))
+                    voando = cv2.resize(grande, (lado_agora, lado_agora), interpolation=cv2.INTER_AREA)
+                    x0 = int(round(cx - lado_agora / 2))
+                    y0 = int(round(cy - lado_agora / 2))
+                    xs0, ys0 = max(0, x0), max(0, y0)
+                    xs1, ys1 = min(largura, x0 + lado_agora), min(altura, y0 + lado_agora)
+                    if xs1 > xs0 and ys1 > ys0:
+                        frame[ys0:ys1, xs0:xs1] = voando[ys0 - y0:ys1 - y0, xs0 - x0:xs1 - x0]
+
+                escritor.write(np.clip(frame, 0, 255).astype(np.uint8))
 
             if progresso:
                 pct = int(f_idx / total_frames * 100)
