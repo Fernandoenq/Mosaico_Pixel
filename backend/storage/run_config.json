@@ -1235,7 +1235,7 @@
   "duplicateDistLimit": 3,
   "colorStrictness": 1.0,
   "hotFolderDir": "storage/hot_folder",
-  "targetBaseUrl": "/storage/target_base.jpg?t=778466",
+  "targetBaseUrl": "/storage/target_base.jpg?t=e12e60dc",
   "foregroundUrl": "/storage/foreground.png?t=b36ba403",
   "photosAboveBrand": true,
   "autoPlaceMode": true,
