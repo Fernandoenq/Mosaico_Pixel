@@ -207,3 +207,7 @@ backend/storage/run_state.json
 # Caches
 __pycache__/
 .pytest_cache/
+
+# Cache do Vite (regenerado a cada dev)
+.vite/
+frontend/.vite/
