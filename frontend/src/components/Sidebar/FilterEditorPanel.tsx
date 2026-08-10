@@ -12,6 +12,7 @@ interface FilterOption {
 
 const FILTER_PALETTE: FilterOption[] = [
   { id: 'red', name: 'Vermelho HSBC', color: '#ff0044', bgGradient: 'from-red-600 to-rose-700', description: 'Tom vermelho marca' },
+  { id: 'red_suave', name: 'Vermelho Suave', color: '#ff8899', bgGradient: 'from-rose-400 to-red-500', description: 'Marca sem apagar o rosto' },
   { id: 'gold', name: 'Dourado Gold', color: '#ffcc00', bgGradient: 'from-amber-400 to-yellow-600', description: 'Efeito dourado premium' },
   { id: 'cyan', name: 'Ciano Cyber', color: '#00ffff', bgGradient: 'from-cyan-400 to-teal-600', description: 'Estilo neon ciano' },
   { id: 'green', name: 'Verde Neon', color: '#00ff66', bgGradient: 'from-emerald-400 to-green-600', description: 'Tom verde vibrante' },

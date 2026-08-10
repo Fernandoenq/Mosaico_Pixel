@@ -766,7 +766,8 @@ export const PixiViewport: React.FC = () => {
       if (!isCellInsideContainerMask(cx, cy, gridOffsetX, gridOffsetY, gw, gh, gridContainerShape)) return;
 
       let colorHex = 0xff0044;
-      if (filterId === 'gold') colorHex = 0xffcc00;
+      if (filterId === 'red_suave') colorHex = 0xff8899;
+      else if (filterId === 'gold') colorHex = 0xffcc00;
       else if (filterId === 'cyan') colorHex = 0x00ffff;
       else if (filterId === 'green') colorHex = 0x00ff66;
       else if (filterId === 'sepia') colorHex = 0xffb380;

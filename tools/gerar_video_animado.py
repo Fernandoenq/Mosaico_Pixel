@@ -52,9 +52,9 @@ def main():
         red_cell_filters = {f"{r}_{c}": "red" for r, c, _ in alvos_orig}
         config["cellFilters"] = red_cell_filters
 
-    print(f"🎬 Gerando vídeo com entrada e saída em {largura}x{altura}...")
-    print(f"   • Fotos utilizadas: {[f.name for f in fotos_validas]}")
-    print(f"   • Destino: {desktop_path}")
+    print(f"Gerando video com entrada e saida em {largura}x{altura}...")
+    print(f"   - Fotos utilizadas: {[f.name for f in fotos_validas]}")
+    print(f"   - Destino: {desktop_path}")
 
     resultado = gerar_video_marca(
         saida=desktop_path,
@@ -64,21 +64,21 @@ def main():
         largura=largura,
         altura=altura,
         fps=30,
-        intervalo_entre_fotos=0.03,
-        hold_central=0.3,
-        duracao_voo=0.4,
-        segundos_finais=3.0,
-        duracao_saida=2.5,
+        intervalo_entre_fotos=0.08,
+        hold_central=0.6,
+        duracao_voo=0.6,
+        segundos_finais=4.0,
+        duracao_saida=3.0,
         modo_saida="dispersar",
         cor_marca=(28, 28, 226),  # BGR do vermelho HSBC
         ordem="centro",
     )
 
-    print("\n✅ VÍDEO CONCLUÍDO COM SUCESSO!")
-    print(f"   📁 Arquivo gerado: {resultado['arquivo']}")
-    print(f"   📐 Resolução: {resultado['resolucao']}")
-    print(f"   ⏱️ Duração total: {resultado['duracao']}s")
-    print(f"   💎 Células no vídeo: {resultado['celulas']} ({resultado['corOriginal']} na cor original do miolo)")
+    print("\nVIDEO CONCLUIDO COM SUCESSO!")
+    print(f"   - Arquivo gerado: {resultado['arquivo']}")
+    print(f"   - Resolucao: {resultado['resolucao']}")
+    print(f"   - Duracao total: {resultado['duracao']}s")
+    print(f"   - Celulas no video: {resultado['celulas']} ({resultado['corOriginal']} na cor original do miolo)")
 
 
 if __name__ == "__main__":

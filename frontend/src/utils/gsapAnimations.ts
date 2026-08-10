@@ -66,6 +66,11 @@ export const applySpriteFilter = (sprite: PIXI.Sprite, filterId?: string) => {
     return;
   }
   if (filterId === 'red') sprite.tint = 0xFF0044;
+  // Vermelho da marca sem apagar o rosto. O tint MULTIPLICA: com 0xFF0044 o
+  // verde e o azul da pele vão quase a zero e sobra uma silhueta chapada.
+  // Mantendo um piso alto nos três canais a foto continua legível e ainda
+  // lê como vermelho.
+  else if (filterId === 'red_suave') sprite.tint = 0xFF8899;
   else if (filterId === 'gold') sprite.tint = 0xFFCC00;
   else if (filterId === 'cyan') sprite.tint = 0x00FFFF;
   else if (filterId === 'green') sprite.tint = 0x00FF66;
