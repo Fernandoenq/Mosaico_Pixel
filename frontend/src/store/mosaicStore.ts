@@ -70,6 +70,7 @@ export const RUN_CONFIG_KEYS = [
   'autoPlaceMode',
   'targetBaseUrl',
   'foregroundUrl',
+  'photosAboveBrand',
   'layers',
 ] as const;
 
@@ -127,6 +128,8 @@ export interface MosaicStore {
   autoPlaceMode: boolean;
   targetBaseUrl: string | null;
   foregroundUrl: string | null;
+  /** Fotos desenhadas POR CIMA do overlay da marca. */
+  photosAboveBrand: boolean;
   
   // State Arrays
   pendingPhotos: PendingPhoto[];
@@ -155,6 +158,7 @@ export interface MosaicStore {
   clearMosaic: () => void;
   setTargetBaseUrl: (url: string | null) => void;
   setForegroundUrl: (url: string | null) => void;
+  setPhotosAboveBrand: (acima: boolean) => void;
   setScreenSize: (width: number, height: number) => void;
   setGridSettings: (rows: number, cols: number, distLimit: number, strictness: number) => void;
   setGridBounds: (offsetX: number, offsetY: number, width: number, height: number) => void;
@@ -266,6 +270,7 @@ export const useMosaicStore = create<MosaicStore>()(
       autoPlaceMode: true,
       targetBaseUrl: null,
       foregroundUrl: null,
+      photosAboveBrand: false,
 
       pendingPhotos: [],
       approvedPhotos: [],
@@ -307,6 +312,7 @@ export const useMosaicStore = create<MosaicStore>()(
 
       setTargetBaseUrl: (targetBaseUrl) => set({ targetBaseUrl }),
       setForegroundUrl: (foregroundUrl) => set({ foregroundUrl }),
+      setPhotosAboveBrand: (photosAboveBrand) => set({ photosAboveBrand }),
       // Reescala o enquadramento da grade junto com o palco. Zerar para tela
       // cheia descartaria o posicionamento que o operador ajustou à mão.
       setScreenSize: (screenWidth, screenHeight) =>
@@ -458,6 +464,7 @@ export const useMosaicStore = create<MosaicStore>()(
         colorStrictness: state.colorStrictness,
         targetBaseUrl: state.targetBaseUrl,
         foregroundUrl: state.foregroundUrl,
+        photosAboveBrand: state.photosAboveBrand,
         hotFolderDir: state.hotFolderDir,
         layers: state.layers,
         lastAppliedConfig: state.lastAppliedConfig,

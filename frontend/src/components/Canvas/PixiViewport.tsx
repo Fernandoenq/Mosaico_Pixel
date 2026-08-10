@@ -67,6 +67,7 @@ export const PixiViewport: React.FC = () => {
     layers,
     targetBaseUrl,
     foregroundUrl,
+    photosAboveBrand,
     setTargetBaseUrl,
     setGridBounds,
     setContextMenu,
@@ -556,6 +557,21 @@ export const PixiViewport: React.FC = () => {
   useEffect(() => {
     drawForegroundLogo();
   }, [foregroundUrl, screenWidth, screenHeight]);
+
+  /**
+   * Fotos por cima ou por baixo do logo.
+   *
+   * Por baixo (padrão) o logo é a moldura e o mosaico só aparece pelos recortes
+   * dele. Por cima o mosaico vai cobrindo a marca conforme enche — o logo
+   * começa inteiro e some atrás das fotos.
+   *
+   * A camada voadora (99) fica acima dos dois nos dois casos: o cartão central
+   * não pode ter o logo atravessado no rosto de quem acabou de se fotografar.
+   */
+  useEffect(() => {
+    const pousadas = layer1Landed.current;
+    if (pousadas) pousadas.zIndex = photosAboveBrand ? 6 : 1;
+  }, [photosAboveBrand]);
 
   /**
    * No painel a grade sobe para cima do overlay da marca; no telão volta para o

@@ -126,6 +126,9 @@ DEFAULTS: dict[str, Any] = {
     # PNG com transparencia desenhado por cima de tudo (Camada 4). E o
     # recorte da marca: onde ele e transparente, o mosaico aparece.
     "foregroundUrl": None,
+    # Fotos DESENHADAS POR CIMA do overlay da marca. Ligado, o mosaico cobre o
+    # logo conforme enche; desligado, o logo fica sempre por cima.
+    "photosAboveBrand": False,
     "autoPlaceMode": True,
     # Camadas
     "layers": DEFAULT_LAYERS,
@@ -277,6 +280,7 @@ COERCERS: dict[str, Callable[[Any, Any], Any]] = {
     "hotFolderDir": _text,
     "targetBaseUrl": _nullable_text,
     "foregroundUrl": _nullable_text,
+    "photosAboveBrand": _bool,
     "autoPlaceMode": _bool,
     "layers": _layers,
 }

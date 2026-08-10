@@ -21,6 +21,8 @@ export const IngestionPanel: React.FC = () => {
     duplicateDistLimit,
     colorStrictness,
     fillSequence,
+    photosAboveBrand,
+    setPhotosAboveBrand,
     autoDuplicateToFill,
     duplicateIntervalSeconds,
     setAutoDuplicateToFill,
@@ -195,6 +197,26 @@ export const IngestionPanel: React.FC = () => {
       alert(err instanceof Error ? err.message : 'Falha ao encaixar a grade');
     } finally {
       setGerandoGrade(false);
+    }
+  };
+
+  /**
+   * Fotos por cima ou por baixo do logo. Publica direto: é escolha de visual
+   * que se decide olhando o telão, não parte da montagem prévia.
+   */
+  const handleFotosAcima = async (acima: boolean) => {
+    setPhotosAboveBrand(acima);
+    try {
+      const res = await fetch('/api/config', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ photosAboveBrand: acima }),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      markConfigApplied();
+    } catch (err) {
+      setPhotosAboveBrand(!acima);
+      alert(err instanceof Error ? err.message : 'Falha ao mudar a ordem das camadas');
     }
   };
 
@@ -859,6 +881,20 @@ export const IngestionPanel: React.FC = () => {
             <option value="espalhado">Espalhado (rodízio por região)</option>
             <option value="visibilidade">Por visibilidade (do lado mais denso)</option>
           </select>
+        </label>
+
+        {/* Ordem das camadas entre mosaico e marca. */}
+        <label className="flex items-center gap-2 text-[10px] text-slate-300 cursor-pointer bg-slate-900/60 px-2 py-1.5 rounded-lg border border-slate-700">
+          <input
+            type="checkbox"
+            checked={photosAboveBrand}
+            onChange={(e) => handleFotosAcima(e.target.checked)}
+            className="w-3.5 h-3.5 accent-cyan-500 cursor-pointer"
+          />
+          <span>
+            Fotos <strong className="text-slate-100">por cima</strong> do logo
+            <span className="text-slate-500"> — o mosaico cobre a marca conforme enche</span>
+          </span>
         </label>
 
         {/* O miolo da arte é chapa preta e nenhuma foto aparece ali. Aqui a

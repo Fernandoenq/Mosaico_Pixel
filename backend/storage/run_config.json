@@ -11,7 +11,7 @@
   "gridThickness": 6,
   "gridOpacity": 0.0,
   "gridShape": "square",
-  "gridContainerShape": "custom_mask",
+  "gridContainerShape": "rectangle",
   "animationPreset": "wave",
   "animationDuration": 0.8,
   "animationEase": "auto",
@@ -1237,6 +1237,7 @@
   "hotFolderDir": "storage/hot_folder",
   "targetBaseUrl": "/storage/target_base.jpg?t=778466",
   "foregroundUrl": "/storage/foreground.png?t=10a6d57b",
+  "photosAboveBrand": true,
   "autoPlaceMode": true,
   "layers": [
     {
