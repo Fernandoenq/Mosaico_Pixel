@@ -49,6 +49,8 @@ export interface FlyAnimationParams {
   gridShape?: 'square' | 'diamond' | 'hexagon' | 'circle';
   preset?: AnimationPreset;
   duration?: number;
+  /** Falso: sem cartao no centro, a foto vai direto para a celula. */
+  centralPreviewEnabled?: boolean;
   centralPreviewDuration?: number;
   cellFilter?: string;
   ease?: string;
@@ -102,6 +104,7 @@ export const animateTileFlight = ({
   gridShape = 'square',
   preset = 'hsbc_cascade',
   duration = 0.8,
+  centralPreviewEnabled = true,
   centralPreviewDuration = 10.0,
   cellFilter,
   ease = AUTO_EASE,
@@ -161,6 +164,9 @@ export const animateTileFlight = ({
     texture.baseTexture.once('loaded', applyPreviewDims);
   }
 
+  // A moldura ciano só faz sentido no cartão central; no voo direto ela viraria
+  // um retângulo brilhante atravessando a tela.
+  cardBorder.visible = centralPreviewEnabled;
   wrapper.addChild(cardBorder);
   applySpriteFilter(previewSprite, cellFilter);
   wrapper.addChild(previewSprite);
@@ -270,11 +276,17 @@ export const animateTileFlight = ({
     ({ ...vars, x: valor, y: valor });
 
   // 🌟 FASE 1: PREVIEW CENTRAL NO CENTRO DA TELA (CAMADA 2)
-  escala.set(0.1);
-  tl.to(escala, escalarPara(1.0, { duration: 0.35, ease: 'back.out(1.7)' }))
-    // Hold no centro em tamanho de cartão. Sem propriedade que mude, o GSAP
-    // ainda respeita a duração — é justamente o tempo de a pessoa se ver.
-    .to(escala, { duration: centralPreviewDuration, ease: 'none' });
+  if (centralPreviewEnabled) {
+    escala.set(0.1);
+    tl.to(escala, escalarPara(1.0, { duration: 0.35, ease: 'back.out(1.7)' }))
+      // Hold no centro em tamanho de cartão. Sem propriedade que mude, o GSAP
+      // ainda respeita a duração — é justamente o tempo de a pessoa se ver.
+      .to(escala, { duration: centralPreviewDuration, ease: 'none' });
+  } else {
+    // Preview desligado: nada de cartão no centro. A foto entra já pequena e só
+    // faz o voo até a célula — o ritmo do telão passa a ser o da fila de fotos.
+    escala.set(Math.min(1, landScale * 2.5));
+  }
 
   // 🌟 FASE 2: VOO DO CENTRO ATÉ O TILE ALVO (CAMADA 2 → CAMADA 1)
   const targetCX = targetX + targetWidth / 2;

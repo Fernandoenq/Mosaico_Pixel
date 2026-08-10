@@ -51,6 +51,7 @@ export const RUN_CONFIG_KEYS = [
   'animationPreset',
   'animationDuration',
   'animationEase',
+  'centralPreviewEnabled',
   'centralPreviewDuration',
   'previewCardScale',
   'idleReplayEnabled',
@@ -92,6 +93,8 @@ export interface MosaicStore {
   animationPreset: AnimationPreset;
   animationDuration: number;
   animationEase: string;
+  /** Desligado, a foto voa direto para a celula, sem cartao no centro. */
+  centralPreviewEnabled: boolean;
   centralPreviewDuration: number;
   /** Lado do cartao de preview como fracao da altura do telao. */
   previewCardScale: number;
@@ -154,6 +157,7 @@ export interface MosaicStore {
   setGridContainerShape: (shape: 'rectangle' | 'diamond_mask' | 'hexagon_mask' | 'circle_mask' | 'hexagon_halftone' | 'auto_color_mask') => void;
   setAnimationConfig: (preset: AnimationPreset, duration: number, ease: string) => void;
   setCentralPreviewDuration: (duration: number) => void;
+  setCentralPreviewEnabled: (enabled: boolean) => void;
   setPreviewCardScale: (scale: number) => void;
   setIdleReplay: (enabled: boolean, delay: number, interval: number) => void;
   setBrushModeActive: (active: boolean) => void;
@@ -231,6 +235,7 @@ export const useMosaicStore = create<MosaicStore>()(
       animationPreset: "hsbc_cascade",
       animationDuration: 0.8,
       animationEase: AUTO_EASE,
+      centralPreviewEnabled: true,
       centralPreviewDuration: 10.0,
       previewCardScale: 1.0,
       idleReplayEnabled: true,
@@ -321,6 +326,7 @@ export const useMosaicStore = create<MosaicStore>()(
       setGridContainerShape: (gridContainerShape) => set({ gridContainerShape }),
       setAnimationConfig: (animationPreset, animationDuration, animationEase) => set({ animationPreset, animationDuration, animationEase }),
       setCentralPreviewDuration: (centralPreviewDuration) => set({ centralPreviewDuration }),
+      setCentralPreviewEnabled: (centralPreviewEnabled) => set({ centralPreviewEnabled }),
       setPreviewCardScale: (previewCardScale) => set({ previewCardScale }),
       setIdleReplay: (idleReplayEnabled, idleReplayDelay, idleReplayInterval) =>
         set({ idleReplayEnabled, idleReplayDelay, idleReplayInterval }),
@@ -422,6 +428,7 @@ export const useMosaicStore = create<MosaicStore>()(
         animationPreset: state.animationPreset,
         animationDuration: state.animationDuration,
         animationEase: state.animationEase,
+        centralPreviewEnabled: state.centralPreviewEnabled,
         centralPreviewDuration: state.centralPreviewDuration,
         previewCardScale: state.previewCardScale,
         idleReplayEnabled: state.idleReplayEnabled,

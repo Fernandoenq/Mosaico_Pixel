@@ -64,6 +64,7 @@ export const AnimationStudio: React.FC = () => {
     animationPreset,
     animationDuration,
     animationEase,
+    centralPreviewEnabled,
     centralPreviewDuration,
     previewCardScale,
     screenHeight,
@@ -73,6 +74,7 @@ export const AnimationStudio: React.FC = () => {
     idleReplayInterval,
     setAnimationConfig,
     setCentralPreviewDuration,
+    setCentralPreviewEnabled,
     setPreviewCardScale,
     setIdleReplay,
   } = useMosaicStore();
@@ -199,7 +201,28 @@ export const AnimationStudio: React.FC = () => {
           />
         </div>
 
-        <div className="flex flex-col gap-1">
+        {/* Liga/desliga o cartão central. Desligado, a foto vai direto para a
+            célula — útil quando a fila da cabine está grande e o telão precisa
+            acompanhar o ritmo. */}
+        <label className="flex items-center justify-between cursor-pointer pt-1">
+          <span className="flex items-center gap-1.5 text-xs font-semibold text-slate-300">
+            <Eye className="w-4 h-4 text-cyan-400" />
+            Preview Central
+          </span>
+          <input
+            type="checkbox"
+            checked={centralPreviewEnabled}
+            onChange={(e) => setCentralPreviewEnabled(e.target.checked)}
+            className="w-4 h-4 accent-cyan-400 cursor-pointer"
+          />
+        </label>
+        {!centralPreviewEnabled && (
+          <span className="text-[10px] text-amber-400/90 leading-snug">
+            Desligado: a foto voa direto para o lugar dela, sem parar no centro.
+          </span>
+        )}
+
+        <div className={`flex flex-col gap-1 ${centralPreviewEnabled ? '' : 'opacity-40 pointer-events-none'}`}>
           <div className="flex justify-between text-xs text-slate-400">
             <span>Preview no Centro</span>
             <span className="font-mono text-cyan-300">{centralPreviewDuration.toFixed(1)}s</span>
@@ -215,7 +238,7 @@ export const AnimationStudio: React.FC = () => {
           />
         </div>
 
-        <div className="flex flex-col gap-1">
+        <div className={`flex flex-col gap-1 ${centralPreviewEnabled ? '' : 'opacity-40 pointer-events-none'}`}>
           <div className="flex justify-between text-xs text-slate-400">
             <span>Tamanho do Preview</span>
             <span className="font-mono text-cyan-300">

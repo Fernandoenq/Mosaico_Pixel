@@ -92,6 +92,8 @@ DEFAULTS: dict[str, Any] = {
     "animationEase": "auto",
     # Tempo em que a foto fica parada no centro do telão. É o momento em que a
     # pessoa se reconhece; abaixo de ~2s ela não consegue apontar para a tela.
+    # Desligado, a foto voa direto para a celula: sem cartao no centro.
+    "centralPreviewEnabled": True,
     "centralPreviewDuration": 10.0,
     # Lado do cartao de preview como fracao da altura do telao. Vive na
     # config (e nao no codigo) para o operador ajustar no painel e ver o
@@ -228,6 +230,7 @@ COERCERS: dict[str, Callable[[Any, Any], Any]] = {
     "animationPreset": _enum(ANIMATION_PRESETS),
     "animationDuration": _float(0.1, 10.0),
     "animationEase": _enum(ANIMATION_EASES),
+    "centralPreviewEnabled": _bool,
     "centralPreviewDuration": _float(0.0, 20.0),
     "previewCardScale": _float(0.20, 1.00),
     "idleReplayEnabled": _bool,

@@ -15,6 +15,7 @@
   "animationPreset": "wave",
   "animationDuration": 0.5,
   "animationEase": "auto",
+  "centralPreviewEnabled": true,
   "centralPreviewDuration": 10.0,
   "previewCardScale": 1.0,
   "idleReplayEnabled": true,
@@ -709,7 +710,7 @@
   "duplicateDistLimit": 3,
   "colorStrictness": 1.0,
   "hotFolderDir": "storage/hot_folder",
-  "targetBaseUrl": "/storage/target_base.jpg?t=804075",
+  "targetBaseUrl": "/storage/target_base.jpg?t=778466",
   "foregroundUrl": "/storage/foreground.png?t=ed066bea",
   "autoPlaceMode": true,
   "layers": [

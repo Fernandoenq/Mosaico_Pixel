@@ -322,6 +322,7 @@ export const PixiViewport: React.FC = () => {
             gridShape: store.gridShape,
             preset: store.animationPreset,
             duration: store.animationDuration,
+            centralPreviewEnabled: store.centralPreviewEnabled,
             centralPreviewDuration: store.centralPreviewDuration,
             cellFilter,
             ease: store.animationEase,
