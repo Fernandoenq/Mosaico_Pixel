@@ -6,6 +6,18 @@ aprovou: fundo preto, a foto surge COLORIDA e grande no centro, voa até a célu
 dela e pousa TINGIDA na cor da marca — as fotos pousadas é que vão desenhando o
 logo, célula por célula, até a arte fechar.
 
+O "outro video" que o cliente mandou depois é uma variação desse modelo, e
+medi-lo quadro a quadro rendeu quatro ajustes que viram parâmetro aqui:
+
+    bg_image_path    a ARTE aparece desde o primeiro frame, não um fundo preto
+                     que vai sendo preenchido;
+    tingir_fotos     as fotos entram na COR ORIGINAL. O vermelho na tela é a
+                     arte por baixo, nas células que ainda não receberam foto;
+    voo_de_fora      a foto entra pequena pela borda e vai direto para a célula.
+                     Não há cartão gigante no centro — ele taparia justamente o
+                     mosaico que está se formando;
+    estilo_losango   o ladrilho é cortado em losango, casando com a malha.
+
 A composição de cada frame, de baixo para cima:
 
     1. fundo preto
@@ -114,6 +126,9 @@ def gerar_video_marca(
     cor_fundo: tuple[int, int, int] = (0, 0, 0),      # BGR do fundo
     intensidade_filtro_claro: float = 0.0,            # 0.0 a 1.0 para esbranquiçar as células claras
     estilo_losango: bool = False,                     # Se True, corta cada foto em formato de losango (efeito picotado)
+    tingir_fotos: bool = True,                        # False: nenhuma foto leva a cor da marca
+    celulas_claras: set[str] | None = None,           # Células que recebem o véu branco, no formato "r_c"
+    voo_de_fora: bool = False,                        # True: a foto entra pequena pela borda, sem cartão central
     ordem: str = "linha",
     bg_image_path: Path | None = None,
     progresso: Callable[[int], None] | None = None,
@@ -151,13 +166,19 @@ def gerar_video_marca(
 
     # Quais células saem TINGIDAS. A pintura do painel manda: célula pintada
     # entra na cor da marca, célula sem pintura entra na cor original.
-    pintadas = set((config.get("cellFilters") or {}).keys())
-    tinge_tudo = not pintadas
+    #
+    # Com `tingir_fotos=False` ninguém é tingido — é o modelo do vídeo de
+    # referência, em que o vermelho na tela é a ARTE aparecendo nas células que
+    # ainda não receberam foto, e não a foto pintada de vermelho.
+    pintadas = set((config.get("cellFilters") or {}).keys()) if tingir_fotos else set()
+    tinge_tudo = tingir_fotos and not pintadas
+    claras = set(celulas_claras or ())
 
     # Recorte quadrado de cada foto, no tamanho do ladrilho, nas duas versões.
     lado_tile = (max(1, int(round(tw))), max(1, int(round(th))))
     cache_tile: list[np.ndarray] = []
     cache_tile_original: list[np.ndarray] = []
+    cache_tile_claro: list[np.ndarray] = []
     cache_grande: list[np.ndarray] = []
     lado_central = int(min(largura, altura) * 0.42)
 
@@ -172,21 +193,46 @@ def gerar_video_marca(
         pequena = cv2.resize(quadrado, lado_tile, interpolation=cv2.INTER_AREA)
         pequena_tingida = tingir(pequena, cor_marca)
         
-        pequena_original = pequena
+        # Véu branco num banco SEPARADO: com `celulas_claras` só o miolo é
+        # lavado, e o resto das fotos continua na cor original. Aplicando por
+        # cima do banco original, o clareamento vazaria para o mosaico inteiro.
+        pequena_clara = pequena
         if intensidade_filtro_claro > 0:
-            branco = np.ones_like(pequena, dtype=np.float32) * 255
-            pequena_original = cv2.addWeighted(pequena.astype(np.float32), 1.0 - intensidade_filtro_claro, branco, intensidade_filtro_claro, 0).astype(np.uint8)
-            
+            branco = np.full_like(pequena, 255, dtype=np.float32)
+            pequena_clara = cv2.addWeighted(
+                pequena.astype(np.float32), 1.0 - intensidade_filtro_claro,
+                branco, intensidade_filtro_claro, 0,
+            ).astype(np.uint8)
+
+        pequena_original = pequena if claras else pequena_clara
+
         if estilo_losango:
             pequena_tingida = aplicar_mascara_losango(pequena_tingida, cor_fundo)
             pequena_original = aplicar_mascara_losango(pequena_original, cor_fundo)
-            
+            pequena_clara = aplicar_mascara_losango(pequena_clara, cor_fundo)
+
         cache_tile.append(pequena_tingida)
         cache_tile_original.append(pequena_original)
+        cache_tile_claro.append(pequena_clara)
         cache_grande.append(cv2.resize(quadrado, (lado_central, lado_central), interpolation=cv2.INTER_AREA))
 
     if not cache_tile:
         raise ValueError("Nenhuma das fotos pôde ser lida.")
+
+    def _banco_da_celula(r: int, c: int) -> list[np.ndarray]:
+        """
+        De qual banco sai o ladrilho desta célula.
+
+        Três destinos e não dois: tingido na cor da marca, cor original, e o
+        véu branco do miolo. Sem separar os dois últimos, clarear o miolo
+        clareava o mosaico inteiro.
+        """
+        chave = f"{r}_{c}"
+        if tinge_tudo or chave in pintadas:
+            return cache_tile
+        if chave in claras:
+            return cache_tile_claro
+        return cache_tile_original
 
     t_entrada_fim = len(alvos) * intervalo_entre_fotos + hold_central + duracao_voo
     t_saida_inicio = t_entrada_fim + segundos_finais
@@ -220,12 +266,15 @@ def gerar_video_marca(
                 t_exit = t - t_saida_inicio
                 p_geral = min(1.0, t_exit / max(0.1, duracao_saida))
                 
-                # Fundo com a cor escolhida para composicao
-                frame = np.full((altura, largura, 3), cor_fundo, dtype=np.float32)
+                # Fundo com a imagem original ou a cor escolhida para composicao
+                if bg_image_path and bg_image_path.exists():
+                    frame = pousadas.copy()
+                else:
+                    frame = np.full((altura, largura, 3), cor_fundo, dtype=np.float32)
                 
                 if modo_saida == "dispersar":
                     for i, (r, c, _) in enumerate(alvos):
-                        banco = cache_tile if (tinge_tudo or f"{r}_{c}" in pintadas) else cache_tile_original
+                        banco = _banco_da_celula(r, c)
                         tile = banco[i % len(banco)]
                         
                         tx = offx + c * tw
@@ -263,7 +312,7 @@ def gerar_video_marca(
                 else: # retorno
                     p_ret = ease_out_cubic(min(1.0, t_exit / max(0.1, duracao_saida)))
                     for i, (r, c, _) in enumerate(alvos):
-                        banco = cache_tile if (tinge_tudo or f"{r}_{c}" in pintadas) else cache_tile_original
+                        banco = _banco_da_celula(r, c)
                         tile = banco[i % len(banco)]
                         tx = offx + c * tw + tw / 2.0
                         ty = offy + r * th + th / 2.0
@@ -290,7 +339,7 @@ def gerar_video_marca(
                     t_pouso = proxima * intervalo_entre_fotos + hold_central + duracao_voo
                     if t < t_pouso:
                         break
-                    banco = cache_tile if (tinge_tudo or f"{r}_{c}" in pintadas) else cache_tile_original
+                    banco = _banco_da_celula(r, c)
                     tile = banco[proxima % len(banco)]
                     y0 = int(round(offy + r * th))
                     x0 = int(round(offx + c * tw))
@@ -318,9 +367,23 @@ def gerar_video_marca(
                     grande = cache_grande[i % len(cache_grande)]
                     alvo_x = offx + c * tw + tw / 2
                     alvo_y = offy + r * th + th / 2
-                    lado_agora = max(2, int(round(lado_central + (tw - lado_central) * p)))
-                    cx = centro_x + (alvo_x - centro_x) * p
-                    cy = centro_y + (alvo_y - centro_y) * p
+
+                    if voo_de_fora:
+                        # Modelo do vídeo de referência: a foto entra PEQUENA
+                        # pela borda mais próxima da célula dela e vai direto
+                        # para o lugar. Não há cartão gigante no meio da tela —
+                        # ele tapa justamente o mosaico que está se formando.
+                        angulo = math.atan2(alvo_y - centro_y, alvo_x - centro_x)
+                        raio = math.hypot(largura, altura) * 0.62
+                        origem_x = centro_x + math.cos(angulo) * raio
+                        origem_y = centro_y + math.sin(angulo) * raio
+                        lado_agora = max(2, int(round(tw * (1.9 - 0.9 * p))))
+                        cx = origem_x + (alvo_x - origem_x) * p
+                        cy = origem_y + (alvo_y - origem_y) * p
+                    else:
+                        lado_agora = max(2, int(round(lado_central + (tw - lado_central) * p)))
+                        cx = centro_x + (alvo_x - centro_x) * p
+                        cy = centro_y + (alvo_y - centro_y) * p
 
                     voando = cv2.resize(grande, (lado_agora, lado_agora), interpolation=cv2.INTER_AREA)
                     x0 = int(round(cx - lado_agora / 2))

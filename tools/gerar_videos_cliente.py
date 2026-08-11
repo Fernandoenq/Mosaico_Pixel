@@ -27,26 +27,27 @@ def main():
     with open(manifesto_path, "r", encoding="utf-8") as f:
         dados = json.load(f)
         
-    # Vamos pegar o cenário Camada 0
-    cenario_id = "camada_0"
+    # Vamos pegar o cenário 3840_x_1920
+    cenario_id = "3840_x_1920"
     config = next((c for c in dados["cenarios"] if c["id"] == cenario_id), None)
     
     if not config:
         config = dados["cenarios"][0]
     
     overlay_path = cenarios_dir / config["arquivo"]
+    bg_image_path = RAIZ / "fundos" / "3840 x 1920 .png"
     
     print(f"Usando overlay: {overlay_path.name}")
+    print(f"Usando imagem de fundo: {bg_image_path.name}")
 
-    largura, altura = config.get("screenWidth", 1920), config.get("screenHeight", 1080)
+    largura, altura = config.get("screenWidth", 3840), config.get("screenHeight", 1920)
     
     desktop_path = Path.home() / "Desktop"
-    video1_path = desktop_path / "Video_Camada0_v2_Cor_Original.mp4"
-    video2_path = desktop_path / "Video_Camada0_v2_Filtro_Branco.mp4"
+    video_path = desktop_path / "videos 2 versao proposta.mp4"
 
-    print("\n--- GERANDO VÍDEO 1 (Camada 0): Fotos no Meio com Cor Original ---")
+    print("\n--- GERANDO VÍDEO (3840x1920): Fundo Intacto + Fotos em Cima com Filtros ---")
     gerar_video_marca(
-        saida=video1_path,
+        saida=video_path,
         fotos=fotos_validas,
         overlay_path=overlay_path,
         config=config,
@@ -61,34 +62,12 @@ def main():
         modo_saida="dispersar",
         cor_marca=(28, 28, 226),
         cor_fundo=(0, 0, 0),
-        intensidade_filtro_claro=0.0, # Cor original no meio
+        intensidade_filtro_claro=0.4, # Leve filtro branco nas áreas do meio/claras
         estilo_losango=False,
-        ordem="linha"
+        ordem="linha",
+        bg_image_path=bg_image_path
     )
-    print(f"Vídeo 1 salvo em: {video1_path}")
-
-    print("\n--- GERANDO VÍDEO 2 (Camada 0): Fotos no Meio com Leve Filtro Branco ---")
-    gerar_video_marca(
-        saida=video2_path,
-        fotos=fotos_validas,
-        overlay_path=overlay_path,
-        config=config,
-        largura=largura,
-        altura=altura,
-        fps=30,
-        intervalo_entre_fotos=0.15,
-        hold_central=0.6,
-        duracao_voo=0.8,
-        segundos_finais=3.0,
-        duracao_saida=4.0,
-        modo_saida="dispersar",
-        cor_marca=(28, 28, 226),
-        cor_fundo=(0, 0, 0),
-        intensidade_filtro_claro=0.45, # Leve filtro branco no meio
-        estilo_losango=False,
-        ordem="linha"
-    )
-    print(f"Vídeo 2 salvo em: {video2_path}")
+    print(f"Vídeo salvo em: {video_path}")
     print("\nCONCLUÍDO!")
 
 if __name__ == "__main__":
