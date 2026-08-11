@@ -50,6 +50,17 @@ def tingir(bgr: np.ndarray, cor_bgr: tuple[int, int, int]) -> np.ndarray:
     return saida.astype(np.uint8)
 
 
+def aplicar_mascara_losango(img: np.ndarray, bg_color: tuple[int, int, int]) -> np.ndarray:
+    """Aplica uma máscara de losango (diamond) na imagem, preenchendo os cantos com bg_color."""
+    h, w = img.shape[:2]
+    mask = np.zeros((h, w), dtype=np.uint8)
+    pts = np.array([[w//2, 0], [w, h//2], [w//2, h], [0, h//2]], np.int32)
+    cv2.fillPoly(mask, [pts], 255)
+    res = np.full_like(img, bg_color)
+    res[mask == 255] = img[mask == 255]
+    return res
+
+
 def carregar_overlay(caminho: Path, largura: int, altura: int):
     """Devolve (rgb_bgr, alfa 0..1) do overlay já na resolução do vídeo."""
     overlay = Image.open(caminho).convert("RGBA").resize((largura, altura), Image.Resampling.LANCZOS)
@@ -100,6 +111,9 @@ def gerar_video_marca(
     duracao_saida: float = 2.0,
     modo_saida: str = "dispersar",
     cor_marca: tuple[int, int, int] = (28, 28, 226),  # BGR do vermelho HSBC
+    cor_fundo: tuple[int, int, int] = (0, 0, 0),      # BGR do fundo
+    intensidade_filtro_claro: float = 0.0,            # 0.0 a 1.0 para esbranquiçar as células claras
+    estilo_losango: bool = False,                     # Se True, corta cada foto em formato de losango (efeito picotado)
     ordem: str = "linha",
     progresso: Callable[[int], None] | None = None,
 ) -> dict:
@@ -155,8 +169,19 @@ def gerar_video_marca(
         x0 = (img.shape[1] - lado) // 2
         quadrado = img[y0:y0 + lado, x0:x0 + lado]
         pequena = cv2.resize(quadrado, lado_tile, interpolation=cv2.INTER_AREA)
-        cache_tile.append(tingir(pequena, cor_marca))
-        cache_tile_original.append(pequena)
+        pequena_tingida = tingir(pequena, cor_marca)
+        
+        pequena_original = pequena
+        if intensidade_filtro_claro > 0:
+            branco = np.ones_like(pequena, dtype=np.float32) * 255
+            pequena_original = cv2.addWeighted(pequena.astype(np.float32), 1.0 - intensidade_filtro_claro, branco, intensidade_filtro_claro, 0).astype(np.uint8)
+            
+        if estilo_losango:
+            pequena_tingida = aplicar_mascara_losango(pequena_tingida, cor_fundo)
+            pequena_original = aplicar_mascara_losango(pequena_original, cor_fundo)
+            
+        cache_tile.append(pequena_tingida)
+        cache_tile_original.append(pequena_original)
         cache_grande.append(cv2.resize(quadrado, (lado_central, lado_central), interpolation=cv2.INTER_AREA))
 
     if not cache_tile:
@@ -173,7 +198,10 @@ def gerar_video_marca(
         raise RuntimeError("Não consegui abrir o VideoWriter.")
 
     centro_x, centro_y = largura / 2, altura / 2
-    pousadas = np.zeros((altura, largura, 3), dtype=np.float32)
+    
+    # Prepara o fundo com a cor escolhida
+    pousadas = np.full((altura, largura, 3), cor_fundo, dtype=np.float32)
+    
     proxima = 0
     ultimo_progresso = -1
     dist_max = math.hypot(largura, altura)
@@ -187,8 +215,8 @@ def gerar_video_marca(
                 t_exit = t - t_saida_inicio
                 p_geral = min(1.0, t_exit / max(0.1, duracao_saida))
                 
-                # Fundo preto para composicao
-                frame = np.zeros((altura, largura, 3), dtype=np.float32)
+                # Fundo com a cor escolhida para composicao
+                frame = np.full((altura, largura, 3), cor_fundo, dtype=np.float32)
                 
                 if modo_saida == "dispersar":
                     for i, (r, c, _) in enumerate(alvos):

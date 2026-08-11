@@ -89,11 +89,13 @@ export const AnimationStudio: React.FC = () => {
     setReplayKey((k) => k + 1);
   };
 
-  const handleOutro = async (modo: 'retorno' | 'dispersar') => {
+  const handleOutro = async (modo: 'retorno' | 'dispersar' | 'espalhar') => {
     const descricao =
-      modo === 'retorno'
-        ? 'As fotos refazem o voo até o centro, crescem e somem — a entrada ao contrário.'
-        : 'Os ladrilhos voam para fora da tela, do centro para as bordas.';
+      modo === 'espalhar'
+        ? 'Cada ladrilho se solta numa direção, anda pouco e apaga — o final do vídeo de referência.'
+        : modo === 'retorno'
+          ? 'As fotos refazem o voo até o centro, crescem e somem — a entrada ao contrário.'
+          : 'Os ladrilhos voam para fora da tela, do centro para as bordas.';
     if (!window.confirm(`Encerrar o mosaico no telão?\n\n${descricao}\n\nA grade fica vazia; as fotos aprovadas são preservadas.`)) {
       return;
     }
@@ -367,21 +369,30 @@ export const AnimationStudio: React.FC = () => {
         </div>
 
         <p className="text-[10px] text-slate-400 leading-snug">
-          Duas saídas para o fim do evento — nenhuma é preset de entrada.
-          <strong className="text-slate-300"> Recolher</strong> é a animação de
-          chegada ao contrário: cada foto refaz o voo até o centro, cresce até o
-          tamanho do cartão e some.{' '}
-          <strong className="text-slate-300">Dispersar</strong> joga os ladrilhos
-          para fora da tela.
+          Três saídas para o fim do evento — nenhuma é preset de entrada.
+          <strong className="text-slate-300"> Dispersar</strong> é o final do
+          vídeo que o cliente mandou: cada ladrilho se solta numa direção, anda
+          pouco e apaga, tudo em menos de um segundo.{' '}
+          <strong className="text-slate-300">Recolher</strong> é a chegada ao
+          contrário, e <strong className="text-slate-300">para fora</strong> joga
+          os ladrilhos para fora da tela.
         </p>
 
         <button
-          onClick={() => handleOutro('retorno')}
+          onClick={() => handleOutro('espalhar')}
           disabled={dispersing}
           className="w-full bg-gradient-to-r from-rose-700 to-orange-700 hover:from-rose-600 hover:to-orange-600 disabled:opacity-50 text-white font-bold text-xs py-2 rounded-lg transition shadow-md flex items-center justify-center gap-1.5 border border-rose-500/40 active:scale-95"
         >
           <Bomb className="w-4 h-4" />
-          {dispersing ? 'Encerrando...' : '🌀 Recolher para o Centro'}
+          {dispersing ? 'Encerrando...' : '✨ Dispersar (referência do cliente)'}
+        </button>
+
+        <button
+          onClick={() => handleOutro('retorno')}
+          disabled={dispersing}
+          className="w-full bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-slate-300 font-semibold text-[11px] py-1.5 rounded-lg transition border border-slate-700 active:scale-95"
+        >
+          🌀 Recolher para o Centro
         </button>
 
         <button

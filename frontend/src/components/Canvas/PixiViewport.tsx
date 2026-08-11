@@ -482,7 +482,9 @@ export const PixiViewport: React.FC = () => {
               screenWidth: store.screenWidth,
               screenHeight: store.screenHeight,
               duration: store.animationDuration * 1.6,
-              modo: data.payload?.modo === 'dispersar' ? 'dispersar' : 'retorno',
+              modo: ['dispersar', 'espalhar'].includes(data.payload?.modo)
+                ? data.payload.modo
+                : 'retorno',
               // Mesmo tamanho da entrada: o ladrilho volta a ser o cartão que
               // a pessoa viu quando a foto dela chegou.
               cardSize: previewCardSize(store.screenHeight, store.previewCardScale),
@@ -767,6 +769,7 @@ export const PixiViewport: React.FC = () => {
 
       let colorHex = 0xff0044;
       if (filterId === 'red_suave') colorHex = 0xff8899;
+      else if (filterId === 'branco_leve') colorHex = 0xf2f4f8;
       else if (filterId === 'gold') colorHex = 0xffcc00;
       else if (filterId === 'cyan') colorHex = 0x00ffff;
       else if (filterId === 'green') colorHex = 0x00ff66;

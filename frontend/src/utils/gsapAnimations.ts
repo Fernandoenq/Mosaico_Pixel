@@ -71,6 +71,21 @@ export const applySpriteFilter = (sprite: PIXI.Sprite, filterId?: string) => {
   // Mantendo um piso alto nos três canais a foto continua legível e ainda
   // lê como vermelho.
   else if (filterId === 'red_suave') sprite.tint = 0xFF8899;
+  else if (filterId === 'branco_leve') {
+    // Véu branco leve. `tint` MULTIPLICA, então nunca clareia — o máximo que
+    // 0xFFFFFF faz é não mexer. Para lavar a foto é preciso somar branco, e
+    // quem soma é o deslocamento da ColorMatrix (a 5ª coluna).
+    const k = 0.35;
+    const cm = new PIXI.ColorMatrixFilter();
+    cm.matrix = [
+      1 - k, 0, 0, 0, k,
+      0, 1 - k, 0, 0, k,
+      0, 0, 1 - k, 0, k,
+      0, 0, 0, 1, 0,
+    ];
+    sprite.tint = 0xFFFFFF;
+    sprite.filters = [cm];
+  }
   else if (filterId === 'gold') sprite.tint = 0xFFCC00;
   else if (filterId === 'cyan') sprite.tint = 0x00FFFF;
   else if (filterId === 'green') sprite.tint = 0x00FF66;
@@ -338,8 +353,13 @@ export const animateTileFlight = ({
   return tl;
 };
 
-/** `dispersar`: para fora da tela. `retorno`: de volta ao centro, o caminho da entrada ao contrário. */
-export type OutroModo = 'dispersar' | 'retorno';
+/**
+ * `dispersar`: para fora da tela.
+ * `retorno`: de volta ao centro, o caminho da entrada ao contrário.
+ * `espalhar`: o final do vídeo de referência — cada ladrilho se solta numa
+ *   direção própria, anda pouco e apaga junto, em menos de um segundo.
+ */
+export type OutroModo = 'dispersar' | 'retorno' | 'espalhar';
 
 export interface MosaicOutroParams {
   landedContainer: PIXI.Container;
@@ -388,6 +408,41 @@ export const animateMosaicOutro = ({
       onComplete?.();
     }
   };
+
+  if (modo === 'espalhar') {
+    /**
+     * O final do vídeo de referência, medido quadro a quadro: o mosaico inteiro
+     * se desfaz em ~0,75s. Os ladrilhos NÃO voam para fora da tela — cada um
+     * anda pouco, numa direção própria, e apaga quase junto. Explodir tudo
+     * radialmente dá um efeito de fogos que não é o que o cliente aprovou.
+     */
+    const duracao = Math.min(0.9, Math.max(0.5, duration * 0.55));
+    tiles.forEach((tile, index) => {
+      // Direção "aleatória" sem Math.random: o índice do ladrilho já espalha o
+      // suficiente e o resultado é o mesmo em todo telão conectado — dois
+      // telões lado a lado se desfazem igual.
+      const angulo = (index * 2.39996) % (Math.PI * 2); // ângulo áureo
+      const alcance = 40 + ((index * 37) % 90);
+      const atraso = ((index * 13) % 100) / 100 * 0.18;
+
+      gsap.to(tile, {
+        duration: duracao,
+        delay: atraso,
+        x: tile.x + Math.cos(angulo) * alcance,
+        y: tile.y + Math.sin(angulo) * alcance,
+        rotation: (((index % 5) - 2) * 0.25),
+        ease: 'power1.out',
+      });
+      gsap.to(tile, {
+        duration: duracao * 0.7,
+        delay: atraso + duracao * 0.3,
+        alpha: 0,
+        ease: 'power2.in',
+        onComplete: terminar,
+      });
+    });
+    return;
+  }
 
   if (modo === 'retorno') {
     // Saída = entrada ao contrário. Cada ladrilho refaz o voo de volta ao

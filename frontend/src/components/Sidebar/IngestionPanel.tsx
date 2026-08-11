@@ -220,6 +220,55 @@ export const IngestionPanel: React.FC = () => {
     }
   };
 
+  // --- Cenários do evento (telão + arte + grade + máscara, tudo junto) ---
+  type Cenario = {
+    id: string; rotulo: string; telao: string; grade: string;
+    celulas: number; vermelhas: number; claras: number;
+  };
+  const [cenarios, setCenarios] = useState<Cenario[]>([]);
+  const [cenarioAtual, setCenarioAtual] = useState<string | null>(null);
+  const [fotosClaras, setFotosClaras] = useState<'original' | 'branco'>('original');
+  const [trocandoCenario, setTrocandoCenario] = useState<string | null>(null);
+  const [resultadoCenario, setResultadoCenario] = useState<string>('');
+
+  useEffect(() => {
+    fetch('/api/cenarios')
+      .then((r) => r.json())
+      .then((d) => {
+        setCenarios(d.cenarios || []);
+        setCenarioAtual(d.atual ?? null);
+      })
+      .catch(() => setResultadoCenario('Não consegui listar os cenários.'));
+  }, []);
+
+  /**
+   * Troca o cenário inteiro: resolução, arte, grade, recorte no logo e a
+   * pintura das células. Tudo vem pronto do backend — os valores foram
+   * calculados em cima da arte do cliente e conferidos uma vez.
+   */
+  const handleCenario = async (id: string, claras: 'original' | 'branco') => {
+    setTrocandoCenario(id);
+    setResultadoCenario('');
+    try {
+      const res = await fetch(`/api/cenarios/${id}/aplicar?fotosClaras=${claras}`, { method: 'POST' });
+      const dados = await res.json();
+      if (!res.ok) throw new Error(dados?.detail || 'Falha ao aplicar o cenário');
+      setCenarioAtual(id);
+      setFotosClaras(claras);
+      setResultadoCenario(
+        `${dados.telao} · grade ${dados.grade} · ${dados.celulas} células` +
+        (dados.liberados ? ` · ${dados.liberados} ladrilho(s) fora do novo desenho foram liberados` : ''),
+      );
+      const cfg = await fetch('/api/config').then((r) => r.json());
+      useMosaicStore.getState().applyServerConfig(cfg.config);
+      useMosaicStore.getState().markConfigApplied();
+    } catch (err) {
+      setResultadoCenario(err instanceof Error ? err.message : 'Falha ao aplicar o cenário');
+    } finally {
+      setTrocandoCenario(null);
+    }
+  };
+
   const [publicandoOrdem, setPublicandoOrdem] = useState(false);
 
   /**
@@ -581,6 +630,81 @@ export const IngestionPanel: React.FC = () => {
           <span className="font-bold text-cyan-300">Aplicar no Telão</span> na barra superior para publicá-las
           e salvá-las no servidor.
         </p>
+      </div>
+
+      {/* 0. Cenário do evento — primeiro card da coluna porque troca TUDO:
+             resolução do telão, arte, grade, recorte no logo e pintura. Aplica
+             direto, sem passar pelo "Aplicar". */}
+      <div className="flex flex-col gap-2.5 bg-slate-800/80 p-3 rounded-lg border border-cyan-800/60 shadow-md">
+        <div className="flex items-center gap-1.5 text-xs font-bold text-cyan-300">
+          <Monitor className="w-4 h-4 text-cyan-400" />
+          <span>Cenário do Evento</span>
+        </div>
+
+        <p className="text-[10px] text-slate-400 leading-snug">
+          Cada cenário é um telão + a arte do cliente + a grade já encaixada no
+          logo. Um clique troca tudo junto.
+        </p>
+
+        {cenarios.length === 0 && (
+          <span className="text-[10px] text-amber-400/90">
+            Nenhum cenário preparado. Rode <code>python tools/preparar_cenarios.py</code> com
+            as artes em <code>fundos/</code>.
+          </span>
+        )}
+
+        <div className="flex flex-col gap-1.5">
+          {cenarios.map((cen) => (
+            <button
+              key={cen.id}
+              onClick={() => handleCenario(cen.id, fotosClaras)}
+              disabled={trocandoCenario !== null}
+              className={`text-left px-2.5 py-2 rounded-lg border transition active:scale-95 disabled:opacity-50 ${
+                cenarioAtual === cen.id
+                  ? 'bg-cyan-600/20 border-cyan-400/50'
+                  : 'bg-slate-900 border-slate-700 hover:bg-slate-800'
+              }`}
+            >
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] font-bold text-slate-100">{cen.telao}</span>
+                <span className="text-[9px] text-slate-500">grade {cen.grade}</span>
+              </div>
+              <div className="text-[9px] text-slate-400 leading-snug">
+                {trocandoCenario === cen.id
+                  ? 'aplicando...'
+                  : `${cen.celulas} células — ${cen.vermelhas} no vermelho, ${cen.claras} no branco`}
+              </div>
+            </button>
+          ))}
+        </div>
+
+        {/* O que acontece nas células do BRANCO do logo. */}
+        <div className="flex flex-col gap-1">
+          <span className="text-[10px] text-slate-400">Fotos na parte branca do logo</span>
+          <div className="flex gap-1.5">
+            {([
+              { valor: 'original', rotulo: 'Cor original' },
+              { valor: 'branco', rotulo: 'Filtro branco' },
+            ] as const).map((op) => (
+              <button
+                key={op.valor}
+                onClick={() => cenarioAtual && handleCenario(cenarioAtual, op.valor)}
+                disabled={trocandoCenario !== null || !cenarioAtual}
+                className={`flex-1 text-[10px] font-bold py-1.5 rounded-lg border transition active:scale-95 disabled:opacity-40 ${
+                  fotosClaras === op.valor
+                    ? 'bg-cyan-600 text-white border-cyan-400/50'
+                    : 'bg-slate-900 text-slate-400 border-slate-700 hover:bg-slate-800'
+                }`}
+              >
+                {op.rotulo}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {resultadoCenario && (
+          <span className="text-[10px] text-emerald-400 leading-snug">{resultadoCenario}</span>
+        )}
       </div>
 
       {/* 1. Target Base Image (Imagem de Fundo do Mosaico) */}

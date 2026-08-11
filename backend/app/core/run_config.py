@@ -129,6 +129,10 @@ DEFAULTS: dict[str, Any] = {
     # Fotos DESENHADAS POR CIMA do overlay da marca. Ligado, o mosaico cobre o
     # logo conforme enche; desligado, o logo fica sempre por cima.
     "photosAboveBrand": False,
+    # Cenario do evento em uso (telao + arte + grade), de storage/cenarios.
+    "cenarioAtual": None,
+    # O que acontece nas celulas do BRANCO do logo: "original" ou "branco".
+    "fotosClaras": "original",
     "autoPlaceMode": True,
     # Camadas
     "layers": DEFAULT_LAYERS,
@@ -281,6 +285,8 @@ COERCERS: dict[str, Callable[[Any, Any], Any]] = {
     "targetBaseUrl": _nullable_text,
     "foregroundUrl": _nullable_text,
     "photosAboveBrand": _bool,
+    "cenarioAtual": _nullable_text,
+    "fotosClaras": _enum(("original", "branco")),
     "autoPlaceMode": _bool,
     "layers": _layers,
 }

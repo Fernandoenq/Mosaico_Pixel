@@ -963,7 +963,7 @@ async def remove_duplicates():
     }
 
 @app.post("/api/mosaic/outro")
-async def play_mosaic_outro(modo: str = "retorno"):
+async def play_mosaic_outro(modo: str = "espalhar"):
     """
     Encerramento do evento: desfaz o mosaico na tela.
 
@@ -975,7 +975,7 @@ async def play_mosaic_outro(modo: str = "retorno"):
     com o que ficou na tela — um telão que reconecte depois não ressuscita o
     mosaico já encerrado. A fila e as fotos aprovadas são preservadas.
     """
-    if modo not in ("retorno", "dispersar"):
+    if modo not in ("retorno", "dispersar", "espalhar"):
         raise HTTPException(status_code=400, detail=f"Modo de saída inválido: {modo}")
 
     tile_count = len(state.engine.placed_tiles)
@@ -1222,6 +1222,112 @@ async def grade_da_marca(cobertura: float = 0.15, distribuicao: str = "visibilid
         "total": total,
         "cobertura_minima": limite,
         "distribuicao": distribuicao,
+    }
+
+
+def _cenarios_disponiveis() -> list[dict]:
+    """Manifesto gerado por tools/preparar_cenarios.py."""
+    manifesto = settings.STORAGE_DIR / "cenarios" / "cenarios.json"
+    if not manifesto.exists():
+        return []
+    try:
+        return json.loads(manifesto.read_text(encoding="utf-8")).get("cenarios", [])
+    except (OSError, json.JSONDecodeError) as exc:
+        print(f"[Cenários] Manifesto ilegível: {exc}")
+        return []
+
+
+@app.get("/api/cenarios")
+async def listar_cenarios():
+    """
+    Cenários prontos do evento: cada um é um telão + arte + grade + máscara.
+
+    O painel mostra só o resumo; a máscara inteira (centenas de células) fica
+    fora daqui para não trafegar em toda abertura de tela.
+    """
+    atual = state.config.get("cenarioAtual")
+    return {
+        "atual": atual,
+        "cenarios": [
+            {
+                "id": c["id"],
+                "rotulo": c["rotulo"],
+                "telao": f"{c['screenWidth']}x{c['screenHeight']}",
+                "grade": f"{c['rows']}x{c['cols']}",
+                "celulas": c["celulasNoLogo"],
+                "vermelhas": c["celulasVermelhas"],
+                "claras": c["celulasClaras"],
+            }
+            for c in _cenarios_disponiveis()
+        ],
+    }
+
+
+@app.post("/api/cenarios/{cenario_id}/aplicar")
+async def aplicar_cenario(cenario_id: str, fotosClaras: str = "original"):
+    """
+    Troca o cenário inteiro numa tacada: resolução do telão, arte, grade,
+    recorte no formato do logo e a pintura de cada célula.
+
+    Os valores vêm calculados de `tools/preparar_cenarios.py`, que roda em cima
+    da arte do cliente. Recalcular aqui, a cada troca, arriscaria dar resultado
+    diferente do que foi conferido na hora de preparar.
+
+    `fotosClaras` decide o que acontece nas células do branco do logo:
+      - "original": a foto como ela é
+      - "branco": um véu branco leve, para clarear sem apagar o rosto
+    """
+    cenario = next((c for c in _cenarios_disponiveis() if c["id"] == cenario_id), None)
+    if cenario is None:
+        raise HTTPException(status_code=404, detail=f"Cenário desconhecido: {cenario_id}")
+
+    arquivo = settings.STORAGE_DIR / "cenarios" / cenario["arquivo"]
+    if not arquivo.exists():
+        raise HTTPException(status_code=409, detail=f"Arte do cenário não está no disco: {cenario['arquivo']}")
+
+    pintura = dict(cenario["cellFilters"])
+    if fotosClaras == "branco":
+        # As claras são as células do branco do logo — as que não têm tinta.
+        for chave in cenario["customMaskCells"]:
+            pintura.setdefault(chave, "branco_leve")
+
+    config = state.apply_config({
+        "screenWidth": cenario["screenWidth"],
+        "screenHeight": cenario["screenHeight"],
+        "rows": cenario["rows"],
+        "cols": cenario["cols"],
+        "gridOffsetX": cenario["gridOffsetX"],
+        "gridOffsetY": cenario["gridOffsetY"],
+        "gridWidth": cenario["gridWidth"],
+        "gridHeight": cenario["gridHeight"],
+        "customMaskCells": cenario["customMaskCells"],
+        "gridContainerShape": "custom_mask",
+        # Quadrado, não losango: o logo novo é cheio, e o ladrilho tem que
+        # cobrir a célula inteira. Foi o losango sobre a arte picotada que
+        # deixava aquele preto entre as fotos parecendo sombra.
+        "gridShape": "square",
+        # A arte volta a ser a moldura por cima do mosaico.
+        "photosAboveBrand": False,
+        "cellFilters": pintura,
+        "foregroundUrl": f"/storage/cenarios/{cenario['arquivo']}?t={uuid.uuid4().hex[:8]}",
+        # A imagem-base é a MESMA arte: sem trocar as duas juntas, o telão
+        # mostra dois logos desencontrados.
+        "targetBaseUrl": f"/storage/cenarios/{cenario['arquivo']}?t={uuid.uuid4().hex[:8]}",
+        "cenarioAtual": cenario_id,
+        "fotosClaras": fotosClaras,
+    })
+
+    orfaos = state.engine.purge_tiles_outside_container()
+    await broadcast_event("CONFIG_UPDATED", config)
+
+    print(f"[Cenários] {cenario_id} aplicado: {cenario['celulasNoLogo']} células, fotos claras={fotosClaras}")
+    return {
+        "status": "success",
+        "cenario": cenario_id,
+        "telao": f"{cenario['screenWidth']}x{cenario['screenHeight']}",
+        "grade": f"{cenario['rows']}x{cenario['cols']}",
+        "celulas": cenario["celulasNoLogo"],
+        "liberados": len(orfaos),
     }
 
 
