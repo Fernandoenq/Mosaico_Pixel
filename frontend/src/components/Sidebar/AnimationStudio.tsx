@@ -73,6 +73,9 @@ export const AnimationStudio: React.FC = () => {
     idleReplayEnabled,
     idleReplayDelay,
     idleReplayInterval,
+    autoOutroOnComplete,
+    outroMode,
+    autoOutroDelaySeconds,
     setAnimationConfig,
     setCentralPreviewDuration,
     setCentralPreviewEnabled,
@@ -361,30 +364,79 @@ export const AnimationStudio: React.FC = () => {
         </div>
       </div>
 
-      {/* Encerramento do evento */}
+      {/* Encerramento do evento e Saída Automática */}
       <div className="flex flex-col gap-2.5 bg-slate-800/80 p-3 rounded-lg border border-rose-900/50 shadow-md mb-6">
-        <div className="flex items-center gap-1.5 text-xs font-bold text-rose-300">
-          <Bomb className="w-4 h-4 text-rose-400" />
-          <span>Encerramento do Evento</span>
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-1.5 text-xs font-bold text-rose-300">
+            <Bomb className="w-4 h-4 text-rose-400" />
+            <span>Saída Automática / Dispersão</span>
+          </div>
         </div>
 
-        <p className="text-[10px] text-slate-400 leading-snug">
-          Três saídas para o fim do evento — nenhuma é preset de entrada.
-          <strong className="text-slate-300"> Dispersar</strong> é o final do
-          vídeo que o cliente mandou: cada ladrilho se solta numa direção, anda
-          pouco e apaga, tudo em menos de um segundo.{' '}
-          <strong className="text-slate-300">Recolher</strong> é a chegada ao
-          contrário, e <strong className="text-slate-300">para fora</strong> joga
-          os ladrilhos para fora da tela.
+        <label className="flex items-center gap-2 cursor-pointer bg-slate-900/50 p-2 rounded border border-slate-700/60">
+          <input
+            type="checkbox"
+            checked={autoOutroOnComplete ?? true}
+            onChange={(e) => useMosaicStore.setState({ autoOutroOnComplete: e.target.checked })}
+            className="rounded bg-slate-700 border-slate-600 text-rose-500 focus:ring-rose-400"
+          />
+          <span className="text-xs text-slate-200 font-medium">
+            Dispersar automaticamente ao concluir 100% do mosaico
+          </span>
+        </label>
+
+        {(autoOutroOnComplete ?? true) && (
+          <div className="flex flex-col gap-2 p-2 bg-slate-900/40 rounded border border-slate-700/40">
+            <div className="flex justify-between items-center text-xs text-slate-400">
+              <span>Efeito ao concluir:</span>
+              <select
+                value={outroMode ?? 'dispersar'}
+                onChange={(e) => useMosaicStore.setState({ outroMode: e.target.value as any })}
+                className="bg-slate-800 text-xs text-rose-300 font-semibold px-2 py-1 rounded border border-slate-600"
+              >
+                <option value="dispersar">💥 Dispersar para Fora (Vídeo)</option>
+                <option value="espalhar">✨ Espalhar Suave</option>
+                <option value="retorno">🌀 Recolher para o Centro</option>
+              </select>
+            </div>
+
+            <div className="flex flex-col gap-1">
+              <div className="flex justify-between text-xs text-slate-400">
+                <span>Pausa com mosaico cheio</span>
+                <span className="font-mono text-rose-300">{(autoOutroDelaySeconds ?? 3).toFixed(1)}s</span>
+              </div>
+              <input
+                type="range"
+                min="1"
+                max="10"
+                step="0.5"
+                value={autoOutroDelaySeconds ?? 3}
+                onChange={(e) => useMosaicStore.setState({ autoOutroDelaySeconds: parseFloat(e.target.value) })}
+                className="w-full h-1.5 bg-slate-700 rounded appearance-none cursor-pointer accent-rose-400"
+              />
+            </div>
+          </div>
+        )}
+
+        <p className="text-[10px] text-slate-400 leading-snug mt-1">
+          Ou acione manualmente a saída do telão a qualquer momento:
         </p>
 
         <button
-          onClick={() => handleOutro('espalhar')}
+          onClick={() => handleOutro('dispersar')}
           disabled={dispersing}
           className="w-full bg-gradient-to-r from-rose-700 to-orange-700 hover:from-rose-600 hover:to-orange-600 disabled:opacity-50 text-white font-bold text-xs py-2 rounded-lg transition shadow-md flex items-center justify-center gap-1.5 border border-rose-500/40 active:scale-95"
         >
           <Bomb className="w-4 h-4" />
-          {dispersing ? 'Encerrando...' : '✨ Dispersar (referência do cliente)'}
+          {dispersing ? 'Encerrando...' : '💥 Dispersar Mosaico (Voo para fora)'}
+        </button>
+
+        <button
+          onClick={() => handleOutro('espalhar')}
+          disabled={dispersing}
+          className="w-full bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-slate-300 font-semibold text-[11px] py-1.5 rounded-lg transition border border-slate-700 active:scale-95"
+        >
+          ✨ Espalhar Suave
         </button>
 
         <button
@@ -393,14 +445,6 @@ export const AnimationStudio: React.FC = () => {
           className="w-full bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-slate-300 font-semibold text-[11px] py-1.5 rounded-lg transition border border-slate-700 active:scale-95"
         >
           🌀 Recolher para o Centro
-        </button>
-
-        <button
-          onClick={() => handleOutro('dispersar')}
-          disabled={dispersing}
-          className="w-full bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-slate-300 font-semibold text-[11px] py-1.5 rounded-lg transition border border-slate-600 active:scale-95"
-        >
-          💥 Dispersar para Fora
         </button>
       </div>
     </div>

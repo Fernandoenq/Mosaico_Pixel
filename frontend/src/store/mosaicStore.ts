@@ -71,6 +71,9 @@ export const RUN_CONFIG_KEYS = [
   'targetBaseUrl',
   'foregroundUrl',
   'photosAboveBrand',
+  'autoOutroOnComplete',
+  'outroMode',
+  'autoOutroDelaySeconds',
   'layers',
 ] as const;
 
@@ -130,7 +133,11 @@ export interface MosaicStore {
   foregroundUrl: string | null;
   /** Fotos desenhadas POR CIMA do overlay da marca. */
   photosAboveBrand: boolean;
-  
+  /** Dispersão / Saída automática quando o mosaico estiver 100% preenchido. */
+  autoOutroOnComplete: boolean;
+  outroMode: 'dispersar' | 'retorno' | 'espalhar';
+  autoOutroDelaySeconds: number;
+
   // State Arrays
   pendingPhotos: PendingPhoto[];
   approvedPhotos: PendingPhoto[];
@@ -271,6 +278,9 @@ export const useMosaicStore = create<MosaicStore>()(
       targetBaseUrl: null,
       foregroundUrl: null,
       photosAboveBrand: false,
+      autoOutroOnComplete: true,
+      outroMode: "dispersar",
+      autoOutroDelaySeconds: 3.0,
 
       pendingPhotos: [],
       approvedPhotos: [],

@@ -27,8 +27,8 @@ def main():
     with open(manifesto_path, "r", encoding="utf-8") as f:
         dados = json.load(f)
         
-    # Vamos pegar o cenário Camada 0
-    cenario_id = "camada_0"
+    # Vamos pegar o cenário Camada 1
+    cenario_id = "camada_1"
     config = next((c for c in dados["cenarios"] if c["id"] == cenario_id), None)
     
     if not config:
@@ -63,7 +63,7 @@ def main():
         cor_marca=(28, 28, 226),
         cor_fundo=(0, 0, 0), # Fundo preto
         intensidade_filtro_claro=0.0, # Cor original
-        estilo_losango=True, # Adiciona grade picotada/halftone
+        estilo_losango=False, # Removido o picotado para as células aparecerem inteiras
         ordem="linha" # Linha a linha
     )
     print(f"Vídeo 1 salvo em: {video1_path}")
@@ -84,9 +84,9 @@ def main():
         duracao_saida=4.0,
         modo_saida="dispersar",
         cor_marca=(28, 28, 226),
-        cor_fundo=(255, 255, 255), # Fundo branco
-        intensidade_filtro_claro=0.45, # Leve filtro branco
-        estilo_losango=True, # Adiciona grade picotada/halftone
+        cor_fundo=(0, 0, 0), # Fundo preto, como na Camada 0.png
+        intensidade_filtro_claro=0.45, # Leve filtro branco no meio
+        estilo_losango=False, # Removido o picotado
         ordem="linha"
     )
     print(f"Vídeo 2 salvo em: {video2_path}")

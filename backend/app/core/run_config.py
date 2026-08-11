@@ -136,6 +136,10 @@ DEFAULTS: dict[str, Any] = {
     "autoPlaceMode": True,
     # Camadas
     "layers": DEFAULT_LAYERS,
+    # Saída automática ao completar o mosaico
+    "autoOutroOnComplete": True,
+    "outroMode": "dispersar",
+    "autoOutroDelaySeconds": 3.0,
 }
 
 

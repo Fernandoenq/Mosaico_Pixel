@@ -252,6 +252,7 @@ async def _laco_duplicacao():
                 "target_y": r * state.engine.tile_h,
                 "score": score,
             })
+            check_auto_outro()
     except asyncio.CancelledError:
         raise
     except Exception as exc:
@@ -805,6 +806,7 @@ async def approve_photo(
                 main_loop
             )
             future.result(timeout=5.0)  # Aguarda confirmação de envio (timeout 5s)
+            check_auto_outro()
         except Exception as e:
             print(f"[Approve] ERRO no process_matching: {e}")
 
@@ -922,6 +924,7 @@ async def auto_fill_duplicates(fill_sequence: str | None = None):
 
     restantes = len(state.engine.available_cells())
     print(f"[AutoFill] {placed_count} duplicata(s) posicionada(s); {restantes} célula(s) ainda vaga(s).")
+    check_auto_outro()
     return {
         "status": "success",
         "placed_count": placed_count,
@@ -936,6 +939,7 @@ async def remove_duplicates():
     reais do evento. Toda cópia carrega o sufixo `_dup_` no photo_id, então dá
     para distinguir sem guardar estado à parte.
     """
+    cancel_auto_outro()
     duplicadas = [
         (cell, photo_id)
         for cell, photo_id in state.engine.placed_tiles.items()
@@ -962,19 +966,53 @@ async def remove_duplicates():
         "originais": restantes,
     }
 
-@app.post("/api/mosaic/outro")
-async def play_mosaic_outro(modo: str = "espalhar"):
-    """
-    Encerramento do evento: desfaz o mosaico na tela.
+_outro_task: Optional[asyncio.Task] = None
 
-    `retorno` (padrão) é a animação de entrada ao contrário — cada foto refaz o
-    voo até o centro, cresce até o tamanho do cartão de preview e some.
-    `dispersar` é a saída antiga, com os ladrilhos jogados para fora da tela.
+async def _trigger_auto_outro_after_delay(delay: float, modo: str):
+    try:
+        await asyncio.sleep(delay)
+        if len(state.engine.available_cells()) == 0 and len(state.engine.placed_tiles) > 0 and state.run_state == "running":
+            print(f"[AutoOutro] Mosaico 100% completo com {len(state.engine.placed_tiles)} células! Dispersando mosaico (modo={modo})...")
+            await play_mosaic_outro(modo=modo)
+    except asyncio.CancelledError:
+        pass
+    except Exception as exc:
+        print(f"[AutoOutro] Erro ao disparar dispersão automática: {exc}")
+
+def check_auto_outro():
+    global _outro_task
+    if not state.config.get("autoOutroOnComplete", True):
+        return
+    if len(state.engine.available_cells()) == 0 and len(state.engine.placed_tiles) > 0 and state.run_state == "running":
+        if _outro_task is None or _outro_task.done():
+            delay = float(state.config.get("autoOutroDelaySeconds", 3.0))
+            modo = str(state.config.get("outroMode", "dispersar"))
+            print(f"[AutoOutro] Mosaico preenchido! Agendando dispersão automática ({modo}) em {delay}s...")
+            try:
+                loop = asyncio.get_running_loop()
+                _outro_task = loop.create_task(_trigger_auto_outro_after_delay(delay, modo))
+            except RuntimeError:
+                pass
+
+def cancel_auto_outro():
+    global _outro_task
+    if _outro_task and not _outro_task.done():
+        _outro_task.cancel()
+        _outro_task = None
+
+@app.post("/api/mosaic/outro")
+async def play_mosaic_outro(modo: str = "dispersar"):
+    """
+    Encerramento do evento / conclusão do mosaico: desfaz o mosaico na tela.
+
+    `dispersar` (padrão) é a saída com a animação de explosão radial/dispersão para fora da tela.
+    `espalhar` é o desfazimento suave local.
+    `retorno` é o voo de volta para o centro.
 
     Limpa os ladrilhos no servidor junto com a animação para que o estado bata
-    com o que ficou na tela — um telão que reconecte depois não ressuscita o
-    mosaico já encerrado. A fila e as fotos aprovadas são preservadas.
+    com o que ficou na tela.
     """
+    cancel_auto_outro()
     if modo not in ("retorno", "dispersar", "espalhar"):
         raise HTTPException(status_code=400, detail=f"Modo de saída inválido: {modo}")
 

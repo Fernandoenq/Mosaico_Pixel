@@ -665,9 +665,9 @@ export const IngestionPanel: React.FC = () => {
                   : 'bg-slate-900 border-slate-700 hover:bg-slate-800'
               }`}
             >
-              <div className="flex items-center justify-between">
-                <span className="text-[11px] font-bold text-slate-100">{cen.telao}</span>
-                <span className="text-[9px] text-slate-500">grade {cen.grade}</span>
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-[11px] font-bold text-slate-100 truncate">{cen.rotulo}</span>
+                <span className="text-[9px] text-slate-500 shrink-0">grade {cen.grade}</span>
               </div>
               <div className="text-[9px] text-slate-400 leading-snug">
                 {trocandoCenario === cen.id

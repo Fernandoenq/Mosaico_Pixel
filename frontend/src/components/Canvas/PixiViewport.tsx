@@ -349,6 +349,28 @@ export const PixiViewport: React.FC = () => {
       });
     };
 
+    const pendingOutro = useRef<any>(null);
+
+    const triggerOutroAnimation = (payload: any) => {
+      const store = useMosaicStore.getState();
+      const landed = layer1Landed.current;
+      if (landed) {
+        animateMosaicOutro({
+          landedContainer: landed,
+          screenWidth: store.screenWidth,
+          screenHeight: store.screenHeight,
+          duration: store.animationDuration * 1.6,
+          modo: ['dispersar', 'espalhar', 'retorno'].includes(payload?.modo)
+            ? payload.modo
+            : 'dispersar',
+          cardSize: previewCardSize(store.screenHeight, store.previewCardScale),
+          onComplete: () => clearMosaic(),
+        });
+      } else {
+        clearMosaic();
+      }
+    };
+
     /**
      * Drena a fila em série. O `finally` garante que a trava sempre caia: sem
      * ele, um único erro deixava `isAnimating` preso em true e nenhuma foto
@@ -384,6 +406,11 @@ export const PixiViewport: React.FC = () => {
         }
       } finally {
         isAnimating.current = false;
+        if (pendingOutro.current && animationQueue.current.length === 0 && !unmounted) {
+          const outroPayload = pendingOutro.current;
+          pendingOutro.current = null;
+          triggerOutroAnimation(outroPayload);
+        }
       }
     };
 
@@ -476,22 +503,10 @@ export const PixiViewport: React.FC = () => {
         } else if (data.type === 'MOSAIC_OUTRO') {
           // Dispersa o que está na tela e só então zera o store, senão o efeito
           // de camada redesenharia os tiles por baixo da animação.
-          if (landed) {
-            animateMosaicOutro({
-              landedContainer: landed,
-              screenWidth: store.screenWidth,
-              screenHeight: store.screenHeight,
-              duration: store.animationDuration * 1.6,
-              modo: ['dispersar', 'espalhar'].includes(data.payload?.modo)
-                ? data.payload.modo
-                : 'retorno',
-              // Mesmo tamanho da entrada: o ladrilho volta a ser o cartão que
-              // a pessoa viu quando a foto dela chegou.
-              cardSize: previewCardSize(store.screenHeight, store.previewCardScale),
-              onComplete: () => clearMosaic(),
-            });
+          if (isAnimating.current || animationQueue.current.length > 0) {
+            pendingOutro.current = data.payload || { modo: 'dispersar' };
           } else {
-            clearMosaic();
+            triggerOutroAnimation(data.payload);
           }
         } else if (data.type === 'TARGET_BASE_UPDATED') {
           if (data.payload?.url) {
