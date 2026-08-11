@@ -40,20 +40,14 @@ PROPORCAO_MIN, PROPORCAO_MAX = 0.88, 1.14
 COBERTURA_MINIMA = 0.5
 
 
-def separar_regioes(img_bgr: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+def separar_regioes(img_bgr: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
-    (vermelho, branco) do logo.
-
-    Nem todo branco da arte é logo. Também são brancos os TEXTOS e as tarjas
-    que algumas artes trazem coladas na borda de cima e de baixo. Se qualquer um
-    dos dois entrasse, "HSBC Brazil Decade" e as tarjas virariam célula de foto.
-
-    O que separa é a forma: a chapa do logo é grande NOS DOIS eixos. Letra falha
-    na área; tarja é larguíssima e baixa, e falha na altura.
+    (vermelho, branco, claro) do logo.
     """
     b, g, r = (img_bgr[:, :, i].astype(np.int16) for i in range(3))
     vermelho = (r > 110) & (g < 90) & (b < 90)
-    claro = ((r > 170) & (g > 170) & (b > 170)).astype(np.uint8)
+    claro_mask = ((r > 170) & (g > 170) & (b > 170))
+    claro = claro_mask.astype(np.uint8)
 
     altura, largura = claro.shape
     quantidade, rotulos, stats, _ = cv2.connectedComponentsWithStats(claro, 8)
@@ -64,7 +58,7 @@ def separar_regioes(img_bgr: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         alt = stats[i, cv2.CC_STAT_HEIGHT]
         if area > largura * altura * 0.02 and larg > largura * 0.05 and alt > altura * 0.05:
             branco |= rotulos == i
-    return vermelho, branco
+    return vermelho, branco, claro_mask
 
 
 def melhor_grade(logo: np.ndarray, caixa: tuple[int, int, int, int]) -> tuple[int, int]:
@@ -114,6 +108,8 @@ def grade_do_halftone(vermelho: np.ndarray, branco: np.ndarray) -> dict | None:
     if len(centros) < 50:
         return None
 
+    centros_c = _centroides(branco)
+
     # Agrupa por linha para medir os dois passos separadamente.
     ordenados = centros[np.argsort(centros[:, 1])]
     linhas: list[list] = [[ordenados[0]]]
@@ -148,12 +144,20 @@ def grade_do_halftone(vermelho: np.ndarray, branco: np.ndarray) -> dict | None:
             celulas.append(chave)
             pintura[chave] = "red"
 
+    if len(centros_c):
+        for cx, cy in centros_c:
+            c = int(round((cx - x_min) / passo_x))
+            r = int(round((cy - y_min) / passo_y))
+            chave = f"{r}_{c}"
+            if chave not in celulas:
+                celulas.append(chave)
+
     # As chapas brancas do logo (quando existem) também recebem foto: cada
     # célula da MESMA malha cujo centro cai dentro delas.
     for r in range(rows):
         for c in range(cols):
             chave = f"{r}_{c}"
-            if chave in pintura:
+            if chave in celulas:
                 continue
             cy, cx = int(y0 + (r + 0.5) * passo_y), int(x0 + (c + 0.5) * passo_x)
             if 0 <= cy < branco.shape[0] and 0 <= cx < branco.shape[1] and branco[cy, cx]:
@@ -187,8 +191,8 @@ def preparar(caminho: Path) -> dict:
     altura, largura = img.shape[:2]
     print(f"   {caminho.name}  {largura}x{altura}")
 
-    vermelho, branco = separar_regioes(img)
-    logo = vermelho | branco
+    vermelho, branco, claro_mask = separar_regioes(img)
+    logo = vermelho | claro_mask
     
     ys, xs = np.where(logo)
     if not len(xs):
@@ -199,7 +203,7 @@ def preparar(caminho: Path) -> dict:
 
     # Arte em halftone: a malha de losangos JÁ é a grade. Procurar quadrados de
     # ~250 numa arte dessas partiria losangos ao meio.
-    malha = grade_do_halftone(vermelho, branco)
+    malha = grade_do_halftone(vermelho, claro_mask)
     if malha is not None:
         rows, cols = malha["rows"], malha["cols"]
         x0, y0 = malha["gridOffsetX"], malha["gridOffsetY"]

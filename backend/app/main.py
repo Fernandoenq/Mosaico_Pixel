@@ -151,6 +151,9 @@ _DUP_TASK: asyncio.Task | None = None
 # Contador global de cópias. Garante id único mesmo depois de desligar e religar
 # o interruptor: repetir um id faria a cópia nova sobrescrever a antiga no motor.
 _DUP_CONTADOR = 0
+# Marca a janela entre o `cancel()` e a morte real da task. Sem ela, um
+# desliga/liga rápido deixava o laço morto com o interruptor ligado.
+_DUP_CANCELANDO = False
 
 
 def _caminho_do_storage(url: str) -> Path | None:
@@ -205,7 +208,7 @@ async def _laco_duplicacao():
     A ordem é rodízio sobre as fotos reais: 50 fotos viram 100, depois 150, até
     a grade fechar. Quem chega no meio do evento entra no rodízio na hora.
     """
-    global _DUP_CONTADOR
+    global _DUP_CONTADOR, _DUP_CANCELANDO
     indice = 0
     print("[Duplicação] Ligada — copiando as fotos do mosaico aos poucos.")
     try:
@@ -258,17 +261,30 @@ async def _laco_duplicacao():
     except Exception as exc:
         print(f"[Duplicação] Laço interrompido por erro: {exc}")
     finally:
+        _DUP_CANCELANDO = False
         print("[Duplicação] Desligada.")
 
 
 def _sincronizar_duplicacao():
-    """Liga ou desliga o laço conforme `autoDuplicateToFill`."""
-    global _DUP_TASK
+    """
+    Liga ou desliga o laço conforme `autoDuplicateToFill`.
+
+    `cancel()` NÃO encerra na hora: a task só morre quando a cancelação chega ao
+    `await`, e até lá `done()` continua False. Sem separar "vivo" de "morrendo",
+    desligar e religar rápido caía numa janela em que o laço parecia estar
+    rodando, esta função voltava sem fazer nada, e a task antiga morria em
+    seguida — a duplicação ficava desligada em silêncio, com o interruptor
+    ligado no painel. É a mesma armadilha que derrubou o watcher do S3.
+    """
+    global _DUP_TASK, _DUP_CANCELANDO
     ativo = bool(state.config.get("autoDuplicateToFill", False))
-    rodando = _DUP_TASK is not None and not _DUP_TASK.done()
-    if ativo and not rodando:
+    vivo = _DUP_TASK is not None and not _DUP_TASK.done()
+
+    if ativo and (not vivo or _DUP_CANCELANDO):
+        _DUP_CANCELANDO = False
         _DUP_TASK = asyncio.create_task(_laco_duplicacao())
-    elif not ativo and rodando:
+    elif not ativo and vivo and not _DUP_CANCELANDO:
+        _DUP_CANCELANDO = True
         _DUP_TASK.cancel()
 
 

@@ -116,6 +116,7 @@ export const PixiViewport: React.FC = () => {
 
   const animationQueue = useRef<any[]>([]);
   const isAnimating = useRef(false);
+  const pendingOutro = useRef<any>(null);
 
   /**
    * Teto por foto antes de destravar a fila à força.
@@ -348,8 +349,6 @@ export const PixiViewport: React.FC = () => {
         }
       });
     };
-
-    const pendingOutro = useRef<any>(null);
 
     const triggerOutroAnimation = (payload: any) => {
       const store = useMosaicStore.getState();

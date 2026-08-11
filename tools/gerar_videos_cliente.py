@@ -27,25 +27,24 @@ def main():
     with open(manifesto_path, "r", encoding="utf-8") as f:
         dados = json.load(f)
         
-    # Vamos pegar o cenário Camada 1
-    cenario_id = "camada_1"
+    # Vamos pegar o cenário Camada 0
+    cenario_id = "camada_0"
     config = next((c for c in dados["cenarios"] if c["id"] == cenario_id), None)
     
     if not config:
-        # Pega o primeiro que tiver células claras
-        config = next((c for c in dados["cenarios"] if c.get("celulasClaras", 0) > 0), dados["cenarios"][0])
+        config = dados["cenarios"][0]
     
     overlay_path = cenarios_dir / config["arquivo"]
     
     print(f"Usando overlay: {overlay_path.name}")
 
-    largura, altura = 1920, 1080
+    largura, altura = config.get("screenWidth", 1920), config.get("screenHeight", 1080)
     
     desktop_path = Path.home() / "Desktop"
-    video1_path = desktop_path / "amostra_fundo_preto.mp4"
-    video2_path = desktop_path / "amostra_fundo_branco.mp4"
+    video1_path = desktop_path / "Video_Camada0_v2_Cor_Original.mp4"
+    video2_path = desktop_path / "Video_Camada0_v2_Filtro_Branco.mp4"
 
-    print("\n--- GERANDO VÍDEO 1: Fundo Preto, Cores Originais no Meio ---")
+    print("\n--- GERANDO VÍDEO 1 (Camada 0): Fotos no Meio com Cor Original ---")
     gerar_video_marca(
         saida=video1_path,
         fotos=fotos_validas,
@@ -54,21 +53,21 @@ def main():
         largura=largura,
         altura=altura,
         fps=30,
-        intervalo_entre_fotos=0.15, # Mais devagar
+        intervalo_entre_fotos=0.15,
         hold_central=0.6,
         duracao_voo=0.8,
         segundos_finais=3.0,
-        duracao_saida=4.0, # Dispersao mais lenta
+        duracao_saida=4.0,
         modo_saida="dispersar",
         cor_marca=(28, 28, 226),
-        cor_fundo=(0, 0, 0), # Fundo preto
-        intensidade_filtro_claro=0.0, # Cor original
-        estilo_losango=False, # Removido o picotado para as células aparecerem inteiras
-        ordem="linha" # Linha a linha
+        cor_fundo=(0, 0, 0),
+        intensidade_filtro_claro=0.0, # Cor original no meio
+        estilo_losango=False,
+        ordem="linha"
     )
     print(f"Vídeo 1 salvo em: {video1_path}")
 
-    print("\n--- GERANDO VÍDEO 2: Fundo Branco, Filtro Branco no Meio ---")
+    print("\n--- GERANDO VÍDEO 2 (Camada 0): Fotos no Meio com Leve Filtro Branco ---")
     gerar_video_marca(
         saida=video2_path,
         fotos=fotos_validas,
@@ -84,9 +83,9 @@ def main():
         duracao_saida=4.0,
         modo_saida="dispersar",
         cor_marca=(28, 28, 226),
-        cor_fundo=(0, 0, 0), # Fundo preto, como na Camada 0.png
+        cor_fundo=(0, 0, 0),
         intensidade_filtro_claro=0.45, # Leve filtro branco no meio
-        estilo_losango=False, # Removido o picotado
+        estilo_losango=False,
         ordem="linha"
     )
     print(f"Vídeo 2 salvo em: {video2_path}")
