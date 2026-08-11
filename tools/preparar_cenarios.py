@@ -174,15 +174,13 @@ def grade_do_halftone(vermelho: np.ndarray, branco: np.ndarray) -> dict | None:
         if 0 <= r < rows and 0 <= c < cols:
             vago[r, c] = 0
 
-    # Dentro do contorno há dois tipos de vazio, e tratá-los igual acabaria com
-    # o halftone: o miolo é um bloco contínuo de centenas de células; os
-    # respiros entre um losango e outro são células soltas. Vizinhança de 4
-    # porque na diagonal o xadrez do halftone se emenda todo num bloco só.
-    quantidade, rotulos, stats, _ = cv2.connectedComponentsWithStats(
-        (dentro_do_contorno & vago).astype(np.uint8), connectivity=4
-    )
-    blocos = {i for i in range(1, quantidade) if stats[i, cv2.CC_STAT_AREA] >= 8}
-
+    # TODA célula dentro do contorno recebe foto — inclusive os respiros entre
+    # um losango e outro.
+    #
+    # Antes só entravam os blocos grandes, para preservar o degradê da malha nas
+    # pontas. Na tela isso virou um xadrez de buracos pretos: metade dos quadros
+    # da grade nunca recebia ninguém. O cliente viu e pediu tudo preenchido, e a
+    # cobertura ganha do degradê — quem olha o telão quer se achar nele.
     miolo = 0
     for r in range(rows):
         for c in range(cols):
@@ -191,7 +189,7 @@ def grade_do_halftone(vermelho: np.ndarray, branco: np.ndarray) -> dict | None:
                 continue
             cy, cx = int(y0 + (r + 0.5) * passo_y), int(x0 + (c + 0.5) * passo_x)
             na_chapa = 0 <= cy < branco.shape[0] and 0 <= cx < branco.shape[1] and branco[cy, cx]
-            if na_chapa or rotulos[r, c] in blocos:
+            if na_chapa or dentro_do_contorno[r, c]:
                 celulas.append(chave)
                 miolo += 1
 
