@@ -115,6 +115,7 @@ def gerar_video_marca(
     intensidade_filtro_claro: float = 0.0,            # 0.0 a 1.0 para esbranquiçar as células claras
     estilo_losango: bool = False,                     # Se True, corta cada foto em formato de losango (efeito picotado)
     ordem: str = "linha",
+    bg_image_path: Path | None = None,
     progresso: Callable[[int], None] | None = None,
 ) -> dict:
     if not fotos:
@@ -199,8 +200,12 @@ def gerar_video_marca(
 
     centro_x, centro_y = largura / 2, altura / 2
     
-    # Prepara o fundo com a cor escolhida
-    pousadas = np.full((altura, largura, 3), cor_fundo, dtype=np.float32)
+    # Prepara o fundo com a imagem original ou a cor escolhida
+    if bg_image_path and bg_image_path.exists():
+        bg_img_pil = Image.open(bg_image_path).convert("RGB").resize((largura, altura), Image.Resampling.LANCZOS)
+        pousadas = np.array(bg_img_pil)[:, :, ::-1].astype(np.float32)
+    else:
+        pousadas = np.full((altura, largura, 3), cor_fundo, dtype=np.float32)
     
     proxima = 0
     ultimo_progresso = -1

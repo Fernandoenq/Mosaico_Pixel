@@ -152,19 +152,51 @@ def grade_do_halftone(vermelho: np.ndarray, branco: np.ndarray) -> dict | None:
             if chave not in celulas:
                 celulas.append(chave)
 
-    # As chapas brancas do logo (quando existem) também recebem foto: cada
-    # célula da MESMA malha cujo centro cai dentro delas.
+    # O MIOLO do logo também recebe foto, na cor original.
+    #
+    # Na arte com chapa branca o miolo está pintado e dá para achar pela cor. Na
+    # arte preta ele é da MESMA cor do fundo — nenhum pixel separa um do outro.
+    # O que separa é a geometria: o miolo cai DENTRO do contorno dos losangos, o
+    # fundo cai fora. Sem isso, a versão preta ficava com o meio vazio enquanto
+    # a branca tinha foto ali.
+    ja_usadas = set(celulas)
+    dentro_do_contorno = np.zeros((rows, cols), dtype=np.uint8)
+    if len(centros) >= 3:
+        casco = cv2.convexHull(np.array([
+            [int(round((cx - x_min) / passo_x)), int(round((cy - y_min) / passo_y))]
+            for cx, cy in centros
+        ], dtype=np.int32))
+        cv2.fillConvexPoly(dentro_do_contorno, casco, 1)
+
+    vago = np.ones((rows, cols), dtype=np.uint8)
+    for chave in ja_usadas:
+        r, c = (int(x) for x in chave.split("_"))
+        if 0 <= r < rows and 0 <= c < cols:
+            vago[r, c] = 0
+
+    # Dentro do contorno há dois tipos de vazio, e tratá-los igual acabaria com
+    # o halftone: o miolo é um bloco contínuo de centenas de células; os
+    # respiros entre um losango e outro são células soltas. Vizinhança de 4
+    # porque na diagonal o xadrez do halftone se emenda todo num bloco só.
+    quantidade, rotulos, stats, _ = cv2.connectedComponentsWithStats(
+        (dentro_do_contorno & vago).astype(np.uint8), connectivity=4
+    )
+    blocos = {i for i in range(1, quantidade) if stats[i, cv2.CC_STAT_AREA] >= 8}
+
+    miolo = 0
     for r in range(rows):
         for c in range(cols):
             chave = f"{r}_{c}"
-            if chave in celulas:
+            if chave in ja_usadas:
                 continue
             cy, cx = int(y0 + (r + 0.5) * passo_y), int(x0 + (c + 0.5) * passo_x)
-            if 0 <= cy < branco.shape[0] and 0 <= cx < branco.shape[1] and branco[cy, cx]:
+            na_chapa = 0 <= cy < branco.shape[0] and 0 <= cx < branco.shape[1] and branco[cy, cx]
+            if na_chapa or rotulos[r, c] in blocos:
                 celulas.append(chave)
+                miolo += 1
 
     print(f"      malha {rows}x{cols} passo {passo_x:.1f}x{passo_y:.1f}px -> {len(celulas)} células "
-          f"({len(pintura)} losangos, {len(celulas) - len(pintura)} na chapa branca)")
+          f"({len(pintura)} losangos tingidos, {miolo} no miolo em cor original)")
     return {
         "rows": rows,
         "cols": cols,
@@ -203,15 +235,33 @@ def preparar(caminho: Path) -> dict:
 
     # Arte em halftone: a malha de losangos JÁ é a grade. Procurar quadrados de
     # ~250 numa arte dessas partiria losangos ao meio.
-    malha = grade_do_halftone(vermelho, claro_mask)
+    malha = grade_do_halftone(vermelho, branco)
     if malha is not None:
         rows, cols = malha["rows"], malha["cols"]
         x0, y0 = malha["gridOffsetX"], malha["gridOffsetY"]
         gw, gh = malha["gridWidth"], malha["gridHeight"]
         celulas, pintura = malha["customMaskCells"], malha["cellFilters"]
-        # Vazado: só os objetos (losangos e chapas do logo) viram janela. O
-        # fundo, as tarjas e os textos continuam opacos por cima do mosaico.
-        alfa = np.where(logo, 0, 255).astype(np.uint8)
+
+        # Vazado: só os objetos do logo viram janela. Aqui entra `branco`, a
+        # chapa filtrada — NÃO `claro_mask`, que é todo pixel claro da arte.
+        # Com o cru, os TEXTOS viravam janela e as fotos apareciam dentro das
+        # letras.
+        alfa = np.where(vermelho | branco, 0, 255).astype(np.uint8)
+
+        # O miolo também precisa de janela. Marcar a célula na máscara sem
+        # abrir o overlay colocava foto embaixo de chapa opaca: o meio do logo
+        # continuava preto, com as fotos escondidas atrás dele.
+        tw, th = gw / cols, gh / rows
+        for chave in celulas:
+            if chave in pintura:
+                continue  # losango: a arte já tem a janela
+            r, c = (int(v) for v in chave.split("_"))
+            xa, ya = int(round(x0 + c * tw)), int(round(y0 + r * th))
+            xb, yb = int(round(x0 + (c + 1) * tw)), int(round(y0 + (r + 1) * th))
+            xa, ya = max(0, xa), max(0, ya)
+            xb, yb = min(largura, xb), min(altura, yb)
+            if xb > xa and yb > ya:
+                alfa[ya:yb, xa:xb] = 0
         DESTINO.mkdir(parents=True, exist_ok=True)
         nome = f"{identificador(caminho.name)}.png"
         cv2.imwrite(str(DESTINO / nome), np.dstack([img, alfa]))
