@@ -115,7 +115,9 @@ export const PixiViewport: React.FC = () => {
   const layer5Text = useRef<PIXI.Container | null>(null);
 
   const animationQueue = useRef<any[]>([]);
-  const isAnimating = useRef(false);
+  // Faixas de montagem em voo agora. Era um booleano — vira contador porque o
+  // telão pode animar várias fotos ao mesmo tempo com o preview desligado.
+  const faixasAtivas = useRef(0);
   const pendingOutro = useRef<any>(null);
 
   /**
@@ -371,13 +373,23 @@ export const PixiViewport: React.FC = () => {
     };
 
     /**
-     * Drena a fila em série. O `finally` garante que a trava sempre caia: sem
-     * ele, um único erro deixava `isAnimating` preso em true e nenhuma foto
-     * seguinte aparecia — o mosaico simplesmente parava de receber.
+     * Quantas fotos podem voar AO MESMO TEMPO.
+     *
+     * Com o cartão central ligado a resposta é sempre 1: existe um só centro de
+     * tela, e duas fotos ali viram aquela sobreposição que já custou caro. Com o
+     * preview desligado não há esse limite — e é aí que dá para montar rápido:
+     * 600 células a 3s cada levam meia hora em fila única, e um sexto disso com
+     * seis voos simultâneos.
      */
-    const processQueue = async () => {
-      if (isAnimating.current) return;
-      isAnimating.current = true;
+    const faixasDeMontagem = (store: MosaicStore) =>
+      store.centralPreviewEnabled ? 1 : Math.max(1, Math.min(8, Math.round(store.montagemSimultanea || 1)));
+
+    /**
+     * Drena a fila com N voos em paralelo. O `finally` garante que o contador
+     * sempre caia: sem ele, um único erro deixava a faixa presa e o mosaico
+     * parava de receber.
+     */
+    const faixaDeTrabalho = async () => {
       try {
         while (animationQueue.current.length > 0 && !unmounted) {
           const payload = animationQueue.current.shift();
@@ -404,12 +416,25 @@ export const PixiViewport: React.FC = () => {
           }
         }
       } finally {
-        isAnimating.current = false;
-        if (pendingOutro.current && animationQueue.current.length === 0 && !unmounted) {
-          const outroPayload = pendingOutro.current;
-          pendingOutro.current = null;
-          triggerOutroAnimation(outroPayload);
+        faixasAtivas.current -= 1;
+        if (faixasAtivas.current <= 0) {
+          faixasAtivas.current = 0;
+          if (pendingOutro.current && animationQueue.current.length === 0 && !unmounted) {
+            const outroPayload = pendingOutro.current;
+            pendingOutro.current = null;
+            triggerOutroAnimation(outroPayload);
+          }
         }
+      }
+    };
+
+    const processQueue = () => {
+      const limite = faixasDeMontagem(useMosaicStore.getState());
+      // Só abre faixa nova se houver foto esperando por ela: abrir à toa
+      // deixaria uma faixa girando em falso e atrasaria o encerramento.
+      while (faixasAtivas.current < limite && animationQueue.current.length > faixasAtivas.current) {
+        faixasAtivas.current += 1;
+        void faixaDeTrabalho();
       }
     };
 
@@ -430,7 +455,7 @@ export const PixiViewport: React.FC = () => {
       const store = useMosaicStore.getState();
       if (!store.idleReplayEnabled || store.runState !== 'running') return;
       // Só entra em cena quando não há nada de verdade acontecendo.
-      if (isAnimating.current || animationQueue.current.length > 0) return;
+      if (faixasAtivas.current > 0 || animationQueue.current.length > 0) return;
 
       const agora = Date.now();
       if (agora - ultimoTileEm.valor < store.idleReplayDelay * 1000) return;
@@ -502,7 +527,7 @@ export const PixiViewport: React.FC = () => {
         } else if (data.type === 'MOSAIC_OUTRO') {
           // Dispersa o que está na tela e só então zera o store, senão o efeito
           // de camada redesenharia os tiles por baixo da animação.
-          if (isAnimating.current || animationQueue.current.length > 0) {
+          if (faixasAtivas.current > 0 || animationQueue.current.length > 0) {
             pendingOutro.current = data.payload || { modo: 'dispersar' };
           } else {
             triggerOutroAnimation(data.payload);
@@ -562,7 +587,7 @@ export const PixiViewport: React.FC = () => {
       unmounted = true;
       // O ref sobrevive ao remount do effect (StrictMode em dev): sem este reset
       // a próxima montagem herdava a trava e nunca processava a fila.
-      isAnimating.current = false;
+      faixasAtivas.current = 0;
       window.clearInterval(idleTimer);
       if (reconnectTimer) window.clearTimeout(reconnectTimer);
       ws?.close();

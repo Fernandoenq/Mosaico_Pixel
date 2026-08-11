@@ -55,6 +55,7 @@ export const RUN_CONFIG_KEYS = [
   'centralPreviewDuration',
   'previewCardScale',
   'previewGapSeconds',
+  'montagemSimultanea',
   'idleReplayEnabled',
   'idleReplayDelay',
   'idleReplayInterval',
@@ -106,6 +107,8 @@ export interface MosaicStore {
   previewCardScale: number;
   /** Respiro entre um preview e o proximo, em segundos. */
   previewGapSeconds: number;
+  /** Quantas fotos o telao monta ao mesmo tempo (1 com o preview ligado). */
+  montagemSimultanea: number;
   /** Sem foto nova, o telao volta a destacar fotos ja pousadas. */
   idleReplayEnabled: boolean;
   /** Segundos sem foto nova ate o modo ocioso comecar. */
@@ -177,6 +180,7 @@ export interface MosaicStore {
   setCentralPreviewEnabled: (enabled: boolean) => void;
   setPreviewCardScale: (scale: number) => void;
   setPreviewGapSeconds: (segundos: number) => void;
+  setMontagemSimultanea: (quantidade: number) => void;
   setIdleReplay: (enabled: boolean, delay: number, interval: number) => void;
   setBrushModeActive: (active: boolean) => void;
   setSelectedBrushFilter: (filterId: string) => void;
@@ -258,6 +262,7 @@ export const useMosaicStore = create<MosaicStore>()(
       centralPreviewDuration: 10.0,
       previewCardScale: 1.0,
       previewGapSeconds: 1.5,
+      montagemSimultanea: 1,
       idleReplayEnabled: true,
       idleReplayDelay: 20,
       idleReplayInterval: 5,
@@ -355,6 +360,7 @@ export const useMosaicStore = create<MosaicStore>()(
       setCentralPreviewEnabled: (centralPreviewEnabled) => set({ centralPreviewEnabled }),
       setPreviewCardScale: (previewCardScale) => set({ previewCardScale }),
       setPreviewGapSeconds: (previewGapSeconds) => set({ previewGapSeconds }),
+      setMontagemSimultanea: (montagemSimultanea) => set({ montagemSimultanea }),
       setIdleReplay: (idleReplayEnabled, idleReplayDelay, idleReplayInterval) =>
         set({ idleReplayEnabled, idleReplayDelay, idleReplayInterval }),
 
@@ -461,6 +467,7 @@ export const useMosaicStore = create<MosaicStore>()(
         centralPreviewDuration: state.centralPreviewDuration,
         previewCardScale: state.previewCardScale,
         previewGapSeconds: state.previewGapSeconds,
+        montagemSimultanea: state.montagemSimultanea,
         idleReplayEnabled: state.idleReplayEnabled,
         idleReplayDelay: state.idleReplayDelay,
         idleReplayInterval: state.idleReplayInterval,

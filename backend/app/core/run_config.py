@@ -103,6 +103,9 @@ DEFAULTS: dict[str, Any] = {
     # Respiro entre um preview e o seguinte. Sem ele as fotos entram coladas
     # numa rajada e ninguem consegue acompanhar quem acabou de aparecer.
     "previewGapSeconds": 1.5,
+    # Quantas fotos o telao monta AO MESMO TEMPO. Com o preview central
+    # ligado vale sempre 1: so existe um cartao no centro da tela.
+    "montagemSimultanea": 1,
     # Modo ocioso: sem foto nova por um tempo, o telao volta a destacar
     # fotos que ja estao no mosaico, para a tela nunca ficar parada.
     "idleReplayEnabled": True,
@@ -274,6 +277,7 @@ COERCERS: dict[str, Callable[[Any, Any], Any]] = {
     "centralPreviewDuration": _float(0.0, 20.0),
     "previewCardScale": _float(0.20, 1.00),
     "previewGapSeconds": _float(0.0, 30.0),
+    "montagemSimultanea": _int(1, 8),
     "idleReplayEnabled": _bool,
     "idleReplayDelay": _float(3.0, 600.0),
     "idleReplayInterval": _float(0.0, 300.0),

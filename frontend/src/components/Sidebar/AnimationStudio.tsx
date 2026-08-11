@@ -68,6 +68,7 @@ export const AnimationStudio: React.FC = () => {
     centralPreviewDuration,
     previewCardScale,
     previewGapSeconds,
+    montagemSimultanea,
     screenHeight,
     gridShape,
     idleReplayEnabled,
@@ -81,6 +82,7 @@ export const AnimationStudio: React.FC = () => {
     setCentralPreviewEnabled,
     setPreviewCardScale,
     setPreviewGapSeconds,
+    setMontagemSimultanea,
     setIdleReplay,
   } = useMosaicStore();
 
@@ -266,6 +268,31 @@ export const AnimationStudio: React.FC = () => {
           />
           <span className="text-[10px] text-slate-500">
             Fração da altura do telão. Acima de 90% o cartão encosta nas bordas.
+          </span>
+        </div>
+
+        {/* Quantas fotos voam JUNTAS. É o que mais muda o tempo de montagem:
+            600 células a 3s cada levam meia hora em fila única, e um sexto
+            disso com seis voos ao mesmo tempo. */}
+        <div className={`flex flex-col gap-1 ${centralPreviewEnabled ? 'opacity-40' : ''}`}>
+          <div className="flex justify-between text-xs text-slate-400">
+            <span>Fotos Montando ao Mesmo Tempo</span>
+            <span className="font-mono text-cyan-300">{centralPreviewEnabled ? '1' : montagemSimultanea}</span>
+          </div>
+          <input
+            type="range"
+            min="1"
+            max="8"
+            step="1"
+            value={montagemSimultanea}
+            disabled={centralPreviewEnabled}
+            onChange={(e) => setMontagemSimultanea(parseInt(e.target.value, 10))}
+            className="w-full h-1.5 bg-slate-700 rounded appearance-none cursor-pointer accent-cyan-400 disabled:cursor-not-allowed"
+          />
+          <span className="text-[10px] text-slate-500 leading-snug">
+            {centralPreviewEnabled
+              ? 'Preso em 1 enquanto o preview central estiver ligado: existe um só centro de tela, e duas fotos ali se sobrepõem.'
+              : 'Voos simultâneos. O mosaico fecha na fração do tempo, ao custo de não dar para acompanhar foto por foto.'}
           </span>
         </div>
 
