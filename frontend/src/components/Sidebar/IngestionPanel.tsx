@@ -61,12 +61,43 @@ export const IngestionPanel: React.FC = () => {
   const [exportError, setExportError] = useState<string>('');
 
   const [duplicando, setDuplicando] = useState(false);
+  const [fechandoDevagar, setFechandoDevagar] = useState(false);
   const [resultadoDuplicar, setResultadoDuplicar] = useState<{ texto: string; erro: boolean } | null>(null);
   const [intervaloDup, setIntervaloDup] = useState(duplicateIntervalSeconds);
 
   // O servidor manda no ritmo enquanto o laço roda; o controle local só
   // acompanha o que veio do INIT_STATE.
   useEffect(() => setIntervaloDup(duplicateIntervalSeconds), [duplicateIntervalSeconds]);
+
+  /**
+   * Quem sabe se o fechamento animado ainda roda é o backend.
+   *
+   * O laço termina sozinho quando a grade fecha, e o clique que o começou não
+   * fica sabendo: sem esta consulta o botão ficava preso em "Parar" e o operador
+   * clicava num laço que não existia mais. Também é o que devolve o estado certo
+   * depois de um F5 no meio do fechamento, ou quando o painel foi aberto em
+   * outra máquina.
+   */
+  useEffect(() => {
+    let vivo = true;
+    const consultar = async () => {
+      try {
+        const res = await fetch('/api/mosaic/fechar-animado');
+        if (!res.ok) return;
+        const dados = await res.json();
+        if (vivo) setFechandoDevagar(Boolean(dados.rodando));
+      } catch {
+        // Backend fora do ar: o painel inteiro já mostra isso. Insistir aqui só
+        // encheria o console de erro a cada 4s.
+      }
+    };
+    consultar();
+    const timer = window.setInterval(consultar, 4000);
+    return () => {
+      vivo = false;
+      window.clearInterval(timer);
+    };
+  }, []);
 
   /**
    * Preenche as células vagas duplicando fotos já aprovadas.
@@ -168,6 +199,42 @@ export const IngestionPanel: React.FC = () => {
       });
     } finally {
       setDuplicando(false);
+    }
+  };
+
+  /** Fecha a grade foto a foto, no ritmo do telão. O irmão devagar do botão de
+   *  cima: mesmo destino, mas passando pela animação de cada foto. */
+  const handleFecharDevagar = async () => {
+    setResultadoDuplicar(null);
+    try {
+      const rota = fechandoDevagar ? '/api/mosaic/fechar-animado/parar' : '/api/mosaic/fechar-animado';
+      const res = await fetch(rota, { method: 'POST' });
+      const dados = await res.json();
+      if (!res.ok) throw new Error(dados?.detail || 'Falha ao fechar o mosaico');
+
+      // Quem manda no rótulo é a resposta, não o clique: se o laço já tinha
+      // acabado sozinho, o botão precisa voltar a "fechar" e não travar em
+      // "parar" esperando um laço que não existe mais.
+      setFechandoDevagar(dados.status === 'started' || dados.status === 'already_running');
+
+      const minutos = Math.round((dados.estimativa_segundos || 0) / 60);
+      setResultadoDuplicar({
+        erro: false,
+        texto:
+          dados.status === 'started'
+            ? `Fechando foto a foto: ${dados.restantes} célula(s), ~${minutos || 1} min.`
+            : dados.status === 'stopped'
+              ? `Fechamento interrompido. ${dados.restantes} célula(s) ainda vaga(s).`
+              : dados.status === 'complete'
+                ? 'Nada a preencher — o mosaico já está completo.'
+                : `Já estava fechando: ${dados.restantes} célula(s) restante(s).`,
+      });
+    } catch (err) {
+      setFechandoDevagar(false);
+      setResultadoDuplicar({
+        erro: true,
+        texto: err instanceof Error ? err.message : 'Falha ao fechar o mosaico',
+      });
     }
   };
 
@@ -1348,6 +1415,26 @@ export const IngestionPanel: React.FC = () => {
         >
           ⚡ Fechar o mosaico agora (sem animação)
         </button>
+
+        {/* O mesmo destino do botão de cima, pelo caminho longo: cada cópia
+            passa pela animação inteira. Vira "Parar" enquanto roda, senão a
+            única saída de um fechamento de 40 min era reiniciar o backend. */}
+        <button
+          onClick={handleFecharDevagar}
+          disabled={duplicando}
+          className={`w-full font-semibold text-[11px] py-1.5 rounded-lg transition border active:scale-95 disabled:bg-slate-800 disabled:text-slate-600 disabled:border-slate-700 ${
+            fechandoDevagar
+              ? 'bg-amber-600/25 hover:bg-amber-600/35 text-amber-200 border-amber-500/50'
+              : 'bg-slate-700/70 hover:bg-slate-600/70 text-slate-200 border-slate-600'
+          }`}
+        >
+          {fechandoDevagar ? '⏹ Parar o fechamento' : '🎞️ Fechar devagar, foto a foto'}
+        </button>
+
+        <p className="text-[10px] text-slate-500 leading-snug">
+          Foto a foto, no ritmo do respiro acima: cada cópia entra com a animação
+          completa, até a grade fechar.
+        </p>
 
         {resultadoDuplicar && (
           <span className={`text-[10px] leading-snug ${resultadoDuplicar.erro ? 'text-rose-400' : 'text-emerald-400'}`}>

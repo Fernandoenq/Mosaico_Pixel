@@ -155,6 +155,11 @@ _DUP_CONTADOR = 0
 # desliga/liga rápido deixava o laço morto com o interruptor ligado.
 _DUP_CANCELANDO = False
 
+# Fechamento animado: mesma duplicação, mas em um só gesto — enche o que falta
+# foto a foto e para sozinho quando a grade fecha.
+_FECHA_TASK: asyncio.Task | None = None
+_FECHA_CANCELANDO = False
+
 
 def _caminho_do_storage(url: str) -> Path | None:
     """Arquivo em disco por trás de uma URL /storage/..."""
@@ -196,6 +201,108 @@ def _espera_entre_copias() -> float:
     return max(0.2, exibicao + respiro, intervalo)
 
 
+async def _duplicar_uma_foto(fontes: list[tuple[str, str]], indice: int) -> bool:
+    """
+    Copia UMA foto do rodízio para a próxima célula vaga. True se pousou.
+
+    Sai por `TILE_PLACED`, o mesmo evento de uma foto nova — é o que faz o telão
+    animar a cópia igual: cartão no centro e voo até a célula.
+
+    Dividido entre o laço gradual e o fechamento animado, que só diferem em
+    QUANDO param: o interruptor roda enquanto estiver ligado, o fechamento roda
+    até a grade fechar.
+    """
+    global _DUP_CONTADOR
+
+    photo_id_fonte, url = fontes[indice % len(fontes)]
+    caminho = _caminho_do_storage(url)
+    img_bgr = cv2.imread(str(caminho)) if caminho and caminho.exists() else None
+    if img_bgr is None:
+        print(f"[Duplicação] Arquivo ilegível para {photo_id_fonte}, pulando.")
+        return False
+
+    _DUP_CONTADOR += 1
+    novo_id = f"{photo_id_fonte}_dup_{_DUP_CONTADOR}"
+    r, c, score = state.engine.find_best_tile_position(
+        img_bgr,
+        novo_id,
+        duplicate_dist_limit=0,
+        strictness=state.color_strictness,
+        fill_sequence=state.fill_sequence,
+    )
+    if r is None:
+        return False
+
+    state.register_tile_url(novo_id, url)
+    await broadcast_event("TILE_PLACED", {
+        "photo_id": novo_id,
+        "url": url,
+        "row": r,
+        "col": c,
+        "target_x": c * state.engine.tile_w,
+        "target_y": r * state.engine.tile_h,
+        "score": score,
+    })
+    check_auto_outro()
+    return True
+
+
+async def _laco_fechamento_animado():
+    """
+    Fecha a grade foto a foto, no ritmo do telão, e para sozinho no fim.
+
+    O irmão deste laço é `POST /api/mosaic/auto-fill-duplicates`, que despeja
+    tudo de uma vez: serve para a foto oficial e para a gravação, quando não dá
+    para esperar. Só que ele fecha o mosaico num piscar, e é o voo de cada foto
+    que o telão existe para mostrar. Aqui cada cópia entra com a animação
+    inteira, uma de cada vez, até não sobrar célula.
+
+    Não é o interruptor gradual: aquele é rodízio permanente, fica ligado e
+    absorve quem chega no meio do evento. Este é um gesto de encerramento —
+    começa, fecha e acaba.
+    """
+    global _FECHA_CANCELANDO
+    indice = 0
+    vagas_no_inicio = len(state.engine.available_cells())
+    print(f"[Fechamento] Animado, foto a foto — {vagas_no_inicio} célula(s) a preencher.")
+    try:
+        while True:
+            if not state.engine.available_cells():
+                print("[Fechamento] Grade fechada.")
+                break
+
+            fontes = _fotos_reais_no_mosaico()
+            if not fontes:
+                print("[Fechamento] Sem foto real no mosaico para copiar — encerrando.")
+                break
+
+            if await _duplicar_uma_foto(fontes, indice):
+                indice += 1
+            elif indice >= len(fontes) * 2:
+                # Todo o rodízio já falhou duas voltas seguidas: os arquivos
+                # sumiram do disco ou não há célula alcançável. Insistir aqui
+                # seria um laço eterno cuspindo erro no log.
+                print("[Fechamento] Nenhuma foto do rodízio pôde ser posicionada — encerrando.")
+                break
+            else:
+                indice += 1
+                continue
+
+            await asyncio.sleep(_espera_entre_copias())
+    except asyncio.CancelledError:
+        print("[Fechamento] Interrompido pelo painel.")
+        raise
+    except Exception as exc:
+        print(f"[Fechamento] Laço interrompido por erro: {exc}")
+    finally:
+        _FECHA_CANCELANDO = False
+
+
+def _fechamento_animado_rodando() -> bool:
+    """Vivo E não em processo de morrer — a mesma distinção do laço gradual."""
+    return _FECHA_TASK is not None and not _FECHA_TASK.done() and not _FECHA_CANCELANDO
+
+
 async def _laco_duplicacao():
     """
     Duplicação GRADUAL, enquanto o interruptor estiver ligado.
@@ -208,7 +315,7 @@ async def _laco_duplicacao():
     A ordem é rodízio sobre as fotos reais: 50 fotos viram 100, depois 150, até
     a grade fechar. Quem chega no meio do evento entra no rodízio na hora.
     """
-    global _DUP_CONTADOR, _DUP_CANCELANDO
+    global _DUP_CANCELANDO
     indice = 0
     print("[Duplicação] Ligada — copiando as fotos do mosaico aos poucos.")
     try:
@@ -224,38 +331,8 @@ async def _laco_duplicacao():
             if not fontes:
                 continue
 
-            photo_id_fonte, url = fontes[indice % len(fontes)]
+            await _duplicar_uma_foto(fontes, indice)
             indice += 1
-
-            caminho = _caminho_do_storage(url)
-            img_bgr = cv2.imread(str(caminho)) if caminho and caminho.exists() else None
-            if img_bgr is None:
-                print(f"[Duplicação] Arquivo ilegível para {photo_id_fonte}, pulando.")
-                continue
-
-            _DUP_CONTADOR += 1
-            novo_id = f"{photo_id_fonte}_dup_{_DUP_CONTADOR}"
-            r, c, score = state.engine.find_best_tile_position(
-                img_bgr,
-                novo_id,
-                duplicate_dist_limit=0,
-                strictness=state.color_strictness,
-                fill_sequence=state.fill_sequence,
-            )
-            if r is None:
-                continue
-
-            state.register_tile_url(novo_id, url)
-            await broadcast_event("TILE_PLACED", {
-                "photo_id": novo_id,
-                "url": url,
-                "row": r,
-                "col": c,
-                "target_x": c * state.engine.tile_w,
-                "target_y": r * state.engine.tile_h,
-                "score": score,
-            })
-            check_auto_outro()
     except asyncio.CancelledError:
         raise
     except Exception as exc:
@@ -947,6 +1024,70 @@ async def auto_fill_duplicates(fill_sequence: str | None = None):
         "restantes": restantes,
         "ilegiveis": ilegiveis,
     }
+
+@app.post("/api/mosaic/fechar-animado")
+async def fechar_animado():
+    """
+    Fecha o mosaico foto a foto, com a animação de sempre, e para no fim.
+
+    O `auto-fill-duplicates` fecha tudo no mesmo instante; este leva o tempo do
+    telão: cada cópia ganha o cartão no centro e o voo até a célula. O ritmo é o
+    mesmo respiro da duplicação gradual, então mexer no slider muda os dois.
+    """
+    global _FECHA_TASK, _FECHA_CANCELANDO
+
+    if _fechamento_animado_rodando():
+        return {
+            "status": "already_running",
+            "restantes": len(state.engine.available_cells()),
+        }
+
+    vagas = state.engine.available_cells()
+    if not vagas:
+        return {"status": "complete", "restantes": 0, "estimativa_segundos": 0}
+
+    if not _fotos_reais_no_mosaico():
+        raise HTTPException(
+            status_code=400,
+            detail="Nenhuma foto real no mosaico para copiar. Coloque ao menos uma foto antes de fechar.",
+        )
+
+    _FECHA_CANCELANDO = False
+    _FECHA_TASK = asyncio.create_task(_laco_fechamento_animado())
+    return {
+        "status": "started",
+        "restantes": len(vagas),
+        "estimativa_segundos": round(len(vagas) * _espera_entre_copias()),
+    }
+
+
+@app.get("/api/mosaic/fechar-animado")
+async def status_fechamento_animado():
+    """
+    O laço ainda está de pé?
+
+    Quem pergunta é o painel: o fechamento acaba sozinho quando a grade fecha, e
+    sem isso o botão ficaria preso em "Parar" esperando um laço que já morreu.
+    Também é o que reconstrói o estado depois de um F5 no meio do fechamento.
+    """
+    return {
+        "rodando": _fechamento_animado_rodando(),
+        "restantes": len(state.engine.available_cells()),
+    }
+
+
+@app.post("/api/mosaic/fechar-animado/parar")
+async def parar_fechamento_animado():
+    """Interrompe o fechamento animado. O que já pousou fica."""
+    global _FECHA_CANCELANDO
+
+    if not _fechamento_animado_rodando():
+        return {"status": "idle", "restantes": len(state.engine.available_cells())}
+
+    _FECHA_CANCELANDO = True
+    _FECHA_TASK.cancel()
+    return {"status": "stopped", "restantes": len(state.engine.available_cells())}
+
 
 @app.post("/api/mosaic/remove-duplicates")
 async def remove_duplicates():

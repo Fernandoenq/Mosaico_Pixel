@@ -73,14 +73,28 @@ Pontos que já custaram caro e estão documentados no código:
 
 ## 4.1 Enchendo o mosaico
 
-O desenho da marca tem mais células do que gente na fila. Três caminhos fecham
+O desenho da marca tem mais células do que gente na fila. Quatro caminhos fecham
 a diferença, e eles se somam:
 
 | Caminho | Rota | Comportamento |
 | --- | --- | --- |
 | Duplicação gradual | `PUT /api/config {autoDuplicateToFill}` | Laço no backend copia em rodízio as fotos já pousadas. Cada cópia sai por `TILE_PLACED`, com a animação de foto nova. Quem chega no meio do evento entra no rodízio. |
 | Preenchimento imediato | `POST /api/mosaic/auto-fill-duplicates` | Fecha tudo de uma vez, sem animação. Para a foto oficial e a gravação do vídeo. |
+| Fechamento animado | `POST /api/mosaic/fechar-animado` | Fecha o que falta foto a foto, com a animação inteira, e para sozinho no fim. `GET` na mesma rota diz se ainda roda; `/parar` interrompe. |
 | Desfazer | `POST /api/mosaic/remove-duplicates` | Apaga só os ladrilhos com sufixo `_dup_` e emite `TILES_REMOVED`. As fotos reais ficam. |
+
+Gradual e fechamento animado colocam pela MESMA função (`_duplicar_uma_foto`) e
+só diferem em quando param: o interruptor roda enquanto estiver ligado e absorve
+quem chega no meio do evento; o fechamento é um gesto de encerramento, começa e
+acaba. Os dois obedecem ao mesmo respiro (`duplicateIntervalSeconds` somado ao
+tempo que o telão leva para exibir a cópia anterior), então o slider do painel
+manda nos dois.
+
+O fechamento animado **precisa parar sozinho** — é um laço de fundo num sistema
+que roda ao vivo. Ele acaba quando a grade fecha, quando não há foto real para
+copiar, e quando o rodízio inteiro falha duas voltas seguidas (arquivo sumido do
+disco). Sem a última condição, um lote de arquivos ilegíveis viraria laço eterno
+cuspindo erro no log a noite toda.
 
 O ritmo NÃO é o valor cru de `duplicateIntervalSeconds`: o laço soma o tempo que
 o telão leva para exibir a cópia anterior (hold do preview + voo + respiro).
