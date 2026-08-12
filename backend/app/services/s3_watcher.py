@@ -8,11 +8,30 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+def _parse_patterns(raw: str | None, default: str) -> list[str]:
+    """Lista separada por vírgula, em minúsculas, sem itens vazios."""
+    texto = raw if raw is not None else default
+    return [p.strip().lower() for p in texto.split(",") if p.strip()]
+
+
 class S3Watcher:
     def __init__(self, download_dir: Path, poll_interval: int = 5):
         self.download_dir = download_dir
         self.poll_interval = poll_interval
-        
+
+        # Chaves ignoradas no bucket, por trecho do nome.
+        #
+        # A cabine publica DUAS versões da mesma foto: a original
+        # (`hsbc/totem_0017.jpg`, `originals/...`) e um recorte
+        # (`totem_masked/totem_0017.jpg`, `img_Nmasked.png`). Quem vai para o
+        # mosaico é a original — o recorte entrava como um segundo tile e
+        # colocava a mesma pessoa duas vezes na tela.
+        #
+        # Vazio (`S3_IGNORE_PATTERNS=`) desliga o filtro e baixa tudo.
+        self.ignore_patterns = _parse_patterns(os.getenv("S3_IGNORE_PATTERNS"), "masked")
+        # Só para não repetir o log a cada volta do poll (5s).
+        self._ignoradas_logadas: set[str] = set()
+
         self.bucket_name = os.getenv("S3_BUCKET")
         self.access_key = os.getenv("AWS_ACCESS_KEY_ID")
         self.secret_key = os.getenv("AWS_SECRET_ACCESS_KEY")
@@ -87,14 +106,28 @@ class S3Watcher:
     def _run(self):
         while not self._stop_event.is_set():
             try:
-                response = self.s3.list_objects_v2(Bucket=self.bucket_name)
-                if 'Contents' in response:
-                    objetos = sorted(response['Contents'], key=lambda obj: obj['LastModified'])
+                paginator = self.s3.get_paginator("list_objects_v2")
+                todos_objetos = []
+                for page in paginator.paginate(Bucket=self.bucket_name):
+                    if "Contents" in page:
+                        todos_objetos.extend(page["Contents"])
+
+                if todos_objetos:
+                    objetos = sorted(todos_objetos, key=lambda obj: obj["LastModified"])
                     novas = False
                     for obj in objetos:
-                        key = obj['Key']
-                        # Only download image files
-                        if key not in self.seen_keys and key.lower().endswith(('.png', '.jpg', '.jpeg')):
+                        key = obj["Key"]
+                        # Ignora marcadores de pasta (tamanho 0 ou chave terminando em '/')
+                        if obj.get("Size", 0) == 0 or key.endswith("/"):
+                            continue
+
+                        if self._ignorar(key):
+                            continue
+
+                        # Suporta imagens PNG, JPG, JPEG e WEBP
+                        if key not in self.seen_keys and key.lower().endswith(
+                            (".png", ".jpg", ".jpeg", ".webp")
+                        ):
                             self.seen_keys.add(key)
                             self._download_file(key)
                             novas = True
@@ -107,6 +140,20 @@ class S3Watcher:
             # do ciclo, o join de 3s estourava e a thread ficava agonizando.
             self._stop_event.wait(self.poll_interval)
 
+    def _ignorar(self, key: str) -> bool:
+        """A chave casa com algum padrão de exclusão? (`masked`, por padrão)"""
+        if not self.ignore_patterns:
+            return False
+        alvo = key.lower()
+        if not any(p in alvo for p in self.ignore_patterns):
+            return False
+        # A chave ignorada NÃO entra em `seen_keys`: se o filtro mudar depois,
+        # ela precisa voltar a ser candidata. Por isso o log tem trava própria.
+        if key not in self._ignoradas_logadas:
+            self._ignoradas_logadas.add(key)
+            print(f"[S3Watcher] Ignorada por filtro: {key}")
+        return True
+
     def esquecer_tudo(self):
         """
         Esquece as chaves já importadas, em memória e em disco.
@@ -117,6 +164,7 @@ class S3Watcher:
         """
         with self._state_lock:
             self.seen_keys = set()
+            self._ignoradas_logadas.clear()
             try:
                 self.state_path.unlink(missing_ok=True)
             except OSError as e:

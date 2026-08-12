@@ -29,6 +29,8 @@ export const IngestionPanel: React.FC = () => {
     setDuplicateIntervalSeconds,
     markConfigApplied,
     hotFolderDir,
+    permitirFotosRepetidas,
+    setPermitirFotosRepetidas,
     targetBaseUrl,
     setTargetBaseUrl,
     setScreenSize,
@@ -1487,6 +1489,33 @@ export const IngestionPanel: React.FC = () => {
           />
           <label htmlFor="autoPlaceMode" className="text-[11px] text-emerald-300 font-bold cursor-pointer">
             Auto-Preenchimento (Aprovar e Enviar para Tela 100% Automático)
+          </label>
+        </div>
+
+        {/*
+          A cabine publica a MESMA foto no bucket com dois nomes (`img_Nmasked` e
+          `originals/...`, byte a byte iguais). Por padrão só a primeira entra.
+          Ligado, as duas viram tile: o mosaico enche no dobro da velocidade e a
+          mesma pessoa aparece duas vezes.
+        */}
+        <div className="flex items-center gap-2 mt-1 pt-2 border-t border-slate-700/50">
+          <input
+            type="checkbox"
+            id="permitirFotosRepetidas"
+            checked={permitirFotosRepetidas}
+            onChange={(e) => {
+              const val = e.target.checked;
+              setPermitirFotosRepetidas(val);
+              fetch('/api/config', {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ permitirFotosRepetidas: val })
+              });
+            }}
+            className="w-4 h-4 accent-amber-500 bg-slate-800 border-slate-600 rounded cursor-pointer"
+          />
+          <label htmlFor="permitirFotosRepetidas" className="text-[11px] text-amber-300 font-bold cursor-pointer">
+            Aceitar fotos repetidas (entra o original E a cópia <span className="font-mono">masked</span>)
           </label>
         </div>
       </div>

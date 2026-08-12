@@ -49,9 +49,9 @@ Mosaico_Pixel/
 ## 4. Fluxo de uma foto
 
 ```text
-cabine → S3 → S3Watcher (poll 5s) → hot_folder/
+cabine → S3 → S3Watcher (poll 5s, ignora `*masked*`) → hot_folder/
                                         ↓ watchdog (on_created + on_moved)
-                              dedup por hash MD5
+                    trava por nome (sempre) + por hash MD5 (opcional)
                                         ↓
                             smart_crop_face → storage/tiles/ (512px)
                                         ↓
@@ -66,8 +66,24 @@ Pontos que já custaram caro e estão documentados no código:
 
 - O download do boto3 grava temporário e **renomeia**: o watcher precisa de
   `on_moved`, não só `on_created`. Há ainda uma varredura de segurança a cada 10s.
-- A cabine publica a **mesma foto com dois nomes**; a deduplicação é por hash de
-  conteúdo, não por nome.
+- A cabine publica **duas versões da mesma foto**: a original
+  (`hsbc/totem_0017.jpg`, `originals/...`) e um recorte (`totem_masked/...`,
+  `img_Nmasked.png`). **Quem vai para o mosaico é a original.** O S3Watcher nem
+  baixa o recorte — filtro por trecho do nome em `S3_IGNORE_PATTERNS` (padrão
+  `masked`; vazio desliga o filtro). A chave ignorada **não** entra em
+  `s3_seen.json`, para voltar a ser candidata se o filtro mudar.
+- Depois do filtro ainda existem **duas travas de duplicata**:
+  - **Por nome** (`photo_id`), sempre ligada. A varredura inicial da hot folder
+    reprocessa a pasta inteira a cada restart — sem ela, reiniciar o backend no
+    meio do evento duplicaria o mosaico.
+  - **Por hash de conteúdo** (MD5), controlada por `permitirFotosRepetidas`.
+    Desligada (padrão), duas fotos byte a byte iguais viram um tile só. Ligada,
+    viram dois: o mosaico enche mais rápido e a mesma pessoa aparece duas vezes
+    — é uma decisão de operação, não um bug. Com o filtro do S3 no lugar, esta
+    trava raramente dispara.
+  - Ligar a flag **não é retroativo**: as cópias já recusadas nesta rodada ficam
+    de fora, porque o `photo_id` delas já está registrado. Vale a partir do
+    próximo restart do backend ou do próximo reset do mosaico.
 - As chaves já importadas do S3 são **persistidas** em `storage/s3_seen.json`;
   sem isso, todo restart reimportava o bucket inteiro.
 

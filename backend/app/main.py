@@ -78,10 +78,22 @@ def _ingest_image(img_bgr, photo_id: str, content_hash: str, origem: str):
     Roda sempre fora do event loop, então o broadcast passa por _emit_from_thread.
     """
     with _INGEST_LOCK:
-        ja_visto = state.queue_manager.is_duplicate(content_hash)
-        if ja_visto:
-            print(f"[{origem}] Duplicata ignorada: {photo_id} tem o mesmo conteúdo de {ja_visto}")
+        # Trava por identidade: vale nos dois modos. A varredura inicial da hot
+        # folder reprocessa a pasta inteira a cada restart, e é só isto que
+        # impede o mesmo arquivo de virar um segundo tile.
+        if state.queue_manager.is_duplicate_id(photo_id):
+            print(f"[{origem}] Já ingerido nesta rodada, ignorando: {photo_id}")
             return
+
+        # Trava por conteúdo: opcional. Desligada, a cópia `*masked` que a cabine
+        # publica junto do original também entra no mosaico.
+        if not state.config.get("permitirFotosRepetidas", False):
+            ja_visto = state.queue_manager.is_duplicate(content_hash)
+            if ja_visto:
+                print(f"[{origem}] Duplicata ignorada: {photo_id} tem o mesmo conteúdo de {ja_visto}")
+                return
+
+        state.queue_manager.register_id(photo_id)
         state.queue_manager.register_hash(content_hash, photo_id)
 
         cropped = smart_crop_face(img_bgr, target_size=TILE_SIZE)

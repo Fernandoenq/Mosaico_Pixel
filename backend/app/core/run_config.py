@@ -137,6 +137,12 @@ DEFAULTS: dict[str, Any] = {
     # O que acontece nas celulas do BRANCO do logo: "original" ou "branco".
     "fotosClaras": "original",
     "autoPlaceMode": True,
+    # Aceita no mosaico duas fotos de conteudo identico. A cabine publica o
+    # mesmo arquivo com dois nomes (`img_Nmasked` e `originals/...`); desligado,
+    # so o primeiro entra. Ligado, os dois viram tile e o mosaico enche em
+    # metade do tempo — a mesma pessoa aparece duas vezes, de proposito.
+    # A trava por nome de arquivo continua valendo nos dois modos.
+    "permitirFotosRepetidas": False,
     # Camadas
     "layers": DEFAULT_LAYERS,
     # Saída automática ao completar o mosaico
@@ -296,6 +302,7 @@ COERCERS: dict[str, Callable[[Any, Any], Any]] = {
     "cenarioAtual": _nullable_text,
     "fotosClaras": _enum(("original", "branco")),
     "autoPlaceMode": _bool,
+    "permitirFotosRepetidas": _bool,
     "layers": _layers,
 }
 

@@ -69,6 +69,7 @@ export const RUN_CONFIG_KEYS = [
   'colorStrictness',
   'hotFolderDir',
   'autoPlaceMode',
+  'permitirFotosRepetidas',
   'targetBaseUrl',
   'foregroundUrl',
   'photosAboveBrand',
@@ -132,6 +133,8 @@ export interface MosaicStore {
   colorStrictness: number;
   hotFolderDir: string;
   autoPlaceMode: boolean;
+  /** Aceita duas fotos de conteúdo idêntico (o original e a cópia `*masked`). */
+  permitirFotosRepetidas: boolean;
   targetBaseUrl: string | null;
   foregroundUrl: string | null;
   /** Fotos desenhadas POR CIMA do overlay da marca. */
@@ -188,6 +191,7 @@ export interface MosaicStore {
   setAutoDuplicateToFill: (enabled: boolean) => void;
   setDuplicateIntervalSeconds: (segundos: number) => void;
   setAutoPlaceMode: (enabled: boolean) => void;
+  setPermitirFotosRepetidas: (enabled: boolean) => void;
   paintCell: (row: number, col: number, filterId?: string) => void;
   clearCellFilters: () => void;
   setLayers: (layers: Layer[]) => void;
@@ -280,6 +284,7 @@ export const useMosaicStore = create<MosaicStore>()(
       colorStrictness: 2.0,
       hotFolderDir: 'storage/hot_folder',
       autoPlaceMode: true,
+      permitirFotosRepetidas: false,
       targetBaseUrl: null,
       foregroundUrl: null,
       photosAboveBrand: false,
@@ -371,6 +376,8 @@ export const useMosaicStore = create<MosaicStore>()(
       setDuplicateIntervalSeconds: (segundos) =>
         set({ duplicateIntervalSeconds: segundos, lastAppliedConfig: null }),
       setAutoPlaceMode: (enabled) => set({ autoPlaceMode: enabled, lastAppliedConfig: null }),
+      setPermitirFotosRepetidas: (enabled) =>
+        set({ permitirFotosRepetidas: enabled, lastAppliedConfig: null }),
 
       paintCell: (row, col, filterId) => {
         set((state) => {
