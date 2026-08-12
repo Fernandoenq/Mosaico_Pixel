@@ -95,6 +95,43 @@ sim, células soltas não), senão o degradê da ponta da marca some. A arte
 original vai para `foreground_sem_miolo.png` e
 `POST /api/mosaic/restaurar-marca-original` a devolve.
 
+## 4.2 Cenários do evento
+
+Cada arte que o cliente manda vira um **cenário**: um telão inteiro (overlay +
+grade + máscara de células) que o painel aplica com um clique.
+
+`tools/preparar_cenarios.py` lê as artes de `fundos/`, escreve os overlays e o
+manifesto em `backend/storage/cenarios/`, e o painel os lista por
+`GET /api/cenarios`. `POST /api/cenarios/{id}/aplicar` grava o conjunto no
+RunConfig e retransmite. Roda uma vez, quando chega arte nova:
+
+```bash
+python tools/preparar_cenarios.py
+```
+
+O manifesto **preserva** cenário cuja arte já saiu de `fundos/`, enquanto o
+overlay dele estiver no disco: a pasta é área de trabalho e a faxina de lá não
+pode apagar do painel um cenário que ainda roda.
+
+**A foto entra POR BAIXO da logo vazada.** Cada losango do halftone é recortado
+no formato dele e vira janela transparente; o fundo, a malha entre um losango e
+outro e os textos ficam opacos por cima do mosaico. Abrir toda célula que cai
+dentro do contorno do logo — já tentado, para não sobrar quadro vazio — dissolve
+a malha numa chapa de fotos e o cliente perde o desenho da marca. Quem quiser
+foto no meio do logo usa `abrir-miolo-da-marca`, que é opt-in e reversível.
+
+Duas armadilhas do detector, ambas já pagas em tela:
+
+- **Texto virando janela.** Todo pixel claro da arte inclui "HSBC Brazil Decade"
+  e as tarjas da borda. Só entra a chapa filtrada por tamanho nos dois eixos —
+  e, nas artes de miolo picotado, o losango claro que está DENTRO do contorno da
+  malha vermelha. Letra graúda tem o tamanho de um losango; o que a exclui é o
+  lugar, não a área.
+- **Losango sem célula.** Um centróide por componente perde os losangos que se
+  encostam: o antisserrilhado cola quatro num borrão só e os outros nunca
+  recebem foto. Por isso a célula também vale pela fração de janela que ocupa
+  (`COBERTURA_LOSANGO`) — os dois critérios se somam.
+
 ## 5. Configuração (RunConfig)
 
 Fonte única da verdade, em `backend/app/core/run_config.py`, espelhada em

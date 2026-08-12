@@ -1,16 +1,19 @@
 """
 Prepara os cenários do evento a partir das artes entregues pelo cliente.
 
-Cada arte é um PNG/JPG de tela cheia com o logo CHEIO — não mais o halftone
-picotado em centenas de losangos. Era o picote que deixava aquela "sombra": as
-fotos só apareciam pelos furinhos e o preto entre eles dominava a imagem. Com o
-logo cheio, cada célula da grade é um quadrado inteiro de foto.
+Cada arte é um PNG/JPG de tela cheia. A foto entra POR BAIXO da logo vazada:
+cada losango do halftone é recortado no formato dele e vira uma janela; o fundo,
+a malha entre um losango e outro e os textos ficam opacos por cima do mosaico.
+É o desenho da marca que o cliente veio buscar — já se tentou abrir tudo o que
+cai dentro do contorno para não sobrar quadro vazio, e a malha virou uma chapa
+de fotos sem logo nenhum.
 
 Para cada arte o script produz:
 
-  * o overlay (PNG com alfa) — o logo vira janela transparente, o resto (fundo
-    preto e os textos) continua opaco e é desenhado por cima do mosaico;
-  * a grade que melhor cobre o logo com ~250 células quase quadradas;
+  * o overlay (PNG com alfa) — os losangos viram janela transparente, o resto
+    continua opaco e é desenhado por cima do mosaico;
+  * a grade: nas artes em halftone, a própria malha de losangos; nas de logo
+    chapado, a grade quase quadrada que melhor cobre o logo com ~250 células;
   * a lista de células do logo e a pintura de cada uma: as do vermelho saem
     tingidas, as do branco saem claras.
 
@@ -38,11 +41,26 @@ ALVO_CELULAS = 250
 PROPORCAO_MIN, PROPORCAO_MAX = 0.88, 1.14
 # Fração do ladrilho que precisa estar sobre o logo para a célula valer.
 COBERTURA_MINIMA = 0.5
+# Fração da célula da malha que a janela do losango precisa ocupar para a célula
+# receber foto. O losango cheio fica perto de 0,85; o vizinho que só pega a ponta
+# de um losango ao lado não passa de 0,3.
+COBERTURA_LOSANGO = 0.45
 
 
 def separar_regioes(img_bgr: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
-    (vermelho, branco, claro) do logo.
+    (vermelho, branco chapado, claro cru) do logo.
+
+    Nem todo branco da arte é logo. Também são brancos os TEXTOS e as tarjas que
+    algumas artes trazem coladas na borda de cima e de baixo. Se qualquer um dos
+    dois entrasse, "HSBC Brazil Decade" e as tarjas virariam célula de foto.
+
+    O que separa é a forma: a chapa do logo é grande NOS DOIS eixos. Letra falha
+    na área; tarja é larguíssima e baixa, e falha na altura.
+
+    O claro cru sai junto porque nas artes de miolo picotado não existe chapa
+    nenhuma para achar aqui — quem separa losango de texto lá é `losangos_claros`,
+    pelo tamanho.
     """
     b, g, r = (img_bgr[:, :, i].astype(np.int16) for i in range(3))
     vermelho = (r > 110) & (g < 90) & (b < 90)
@@ -93,7 +111,46 @@ def _centroides(mascara: np.ndarray, area_minima: int = 40) -> np.ndarray:
     ])
 
 
-def grade_do_halftone(vermelho: np.ndarray, branco: np.ndarray) -> dict | None:
+def _area_tipica(mascara: np.ndarray, area_minima: int = 40) -> float:
+    quantidade, _, stats, _ = cv2.connectedComponentsWithStats(mascara.astype(np.uint8), 8)
+    areas = [
+        stats[i, cv2.CC_STAT_AREA] for i in range(1, quantidade)
+        if stats[i, cv2.CC_STAT_AREA] >= area_minima
+    ]
+    return float(np.median(areas)) if areas else 0.0
+
+
+def losangos_claros(claro: np.ndarray, area_referencia: float, casco: np.ndarray) -> np.ndarray:
+    """
+    Os losangos CLAROS da malha, quando o miolo do logo também vem picotado.
+
+    Nas artes em que o miolo é branco chapado, `separar_regioes` acha a chapa e
+    o assunto morre ali. Nestas aqui não existe chapa nenhuma: o branco também é
+    uma malha de centenas de losangos do mesmo tamanho dos vermelhos. Nenhum
+    deles passa no filtro de bloco grande, `branco` sai vazio, e o miolo do logo
+    ficava sem janela — foto atrás de tinta opaca.
+
+    Dois filtros, e os dois são necessários. A ÁREA descarta a tarja da borda,
+    grande demais, e o respingo de antisserrilhado, pequeno demais. Mas letra
+    graúda tem o tamanho de um losango: só pelo tamanho, o "B" de "Brazil" e o
+    "C" de "HSBC" viravam janela e apareciam com foto dentro. O que resolve é o
+    LUGAR — losango mora dentro do contorno da malha vermelha, texto mora fora.
+    """
+    if area_referencia <= 0 or casco is None:
+        return np.zeros(claro.shape, dtype=bool)
+    quantidade, rotulos, stats, centros = cv2.connectedComponentsWithStats(claro.astype(np.uint8), 8)
+    escolhidos = np.zeros(claro.shape, dtype=bool)
+    for i in range(1, quantidade):
+        area = stats[i, cv2.CC_STAT_AREA]
+        if not (0.3 * area_referencia <= area <= 3.0 * area_referencia):
+            continue
+        if cv2.pointPolygonTest(casco, (float(centros[i][0]), float(centros[i][1])), False) < 0:
+            continue
+        escolhidos |= rotulos == i
+    return escolhidos
+
+
+def grade_do_halftone(vermelho: np.ndarray, branco: np.ndarray, claro: np.ndarray) -> dict | None:
     """
     Grade casada com a MALHA de losangos, para artes em halftone.
 
@@ -108,7 +165,11 @@ def grade_do_halftone(vermelho: np.ndarray, branco: np.ndarray) -> dict | None:
     if len(centros) < 50:
         return None
 
-    centros_c = _centroides(branco)
+    # Miolo claro: a chapa (artes antigas) OU a malha de losangos brancos
+    # (artes novas). As duas viram janela e recebem foto em cor original.
+    casco = cv2.convexHull(centros.astype(np.float32).reshape(-1, 1, 2))
+    claros = branco | losangos_claros(claro, _area_tipica(vermelho), casco)
+    centros_c = _centroides(claros)
 
     # Agrupa por linha para medir os dois passos separadamente.
     ordenados = centros[np.argsort(centros[:, 1])]
@@ -152,49 +213,56 @@ def grade_do_halftone(vermelho: np.ndarray, branco: np.ndarray) -> dict | None:
             if chave not in celulas:
                 celulas.append(chave)
 
-    # O MIOLO do logo também recebe foto, na cor original.
+    # Losango que o centróide não viu: quem manda agora é a ÁREA da janela.
     #
-    # Na arte com chapa branca o miolo está pintado e dá para achar pela cor. Na
-    # arte preta ele é da MESMA cor do fundo — nenhum pixel separa um do outro.
-    # O que separa é a geometria: o miolo cai DENTRO do contorno dos losangos, o
-    # fundo cai fora. Sem isso, a versão preta ficava com o meio vazio enquanto
-    # a branca tinha foto ali.
-    ja_usadas = set(celulas)
-    dentro_do_contorno = np.zeros((rows, cols), dtype=np.uint8)
-    if len(centros) >= 3:
-        casco = cv2.convexHull(np.array([
-            [int(round((cx - x_min) / passo_x)), int(round((cy - y_min) / passo_y))]
-            for cx, cy in centros
-        ], dtype=np.int32))
-        cv2.fillConvexPoly(dentro_do_contorno, casco, 1)
-
-    vago = np.ones((rows, cols), dtype=np.uint8)
-    for chave in ja_usadas:
-        r, c = (int(x) for x in chave.split("_"))
-        if 0 <= r < rows and 0 <= c < cols:
-            vago[r, c] = 0
-
-    # TODA célula dentro do contorno recebe foto — inclusive os respiros entre
-    # um losango e outro.
+    # Contar um centróide por componente perde os losangos que se encostam. O
+    # antisserrilhado cola quatro, cinco vizinhos num borrão só, o borrão devolve
+    # um centróide, e os outros ficam sem célula — foto nenhuma pousa neles pelo
+    # evento inteiro. Na arte preta isso era metade da malha.
     #
-    # Antes só entravam os blocos grandes, para preservar o degradê da malha nas
-    # pontas. Na tela isso virou um xadrez de buracos pretos: metade dos quadros
-    # da grade nunca recebia ninguém. O cliente viu e pediu tudo preenchido, e a
-    # cobertura ganha do degradê — quem olha o telão quer se achar nele.
-    miolo = 0
+    # Uma célula da malha é um losango: se a janela ocupa boa parte dela, ali
+    # cabe foto, tenha o borrão dado centróide ou não. Os dois critérios se
+    # somam, não se substituem — o centróide ainda é quem pega o losango
+    # miúdo da ponta do degradê, pequeno demais para preencher a célula.
+    objetos = vermelho | claros
+    for r in range(rows):
+        ya, yb = int(round(y0 + r * passo_y)), int(round(y0 + (r + 1) * passo_y))
+        if yb <= 0 or ya >= objetos.shape[0]:
+            continue
+        for c in range(cols):
+            chave = f"{r}_{c}"
+            if chave in celulas:
+                continue
+            xa, xb = int(round(x0 + c * passo_x)), int(round(x0 + (c + 1) * passo_x))
+            recorte = objetos[max(0, ya):yb, max(0, xa):xb]
+            if recorte.size == 0 or recorte.mean() < COBERTURA_LOSANGO:
+                continue
+            celulas.append(chave)
+            # Quem manda na cor é a tinta que ocupa a maior parte da janela.
+            if vermelho[max(0, ya):yb, max(0, xa):xb].mean() > \
+                    claros[max(0, ya):yb, max(0, xa):xb].mean():
+                pintura[chave] = "red"
+
+    # A chapa branca do logo (quando existe) também recebe foto: cada célula da
+    # MESMA malha cujo centro cai dentro dela.
+    #
+    # E só. Já se tentou abrir TODA célula dentro do contorno do logo, para não
+    # sobrar quadro vazio — e o preço foi a marca: com tudo aberto o losango
+    # deixa de existir, a malha vira uma chapa de fotos e o cliente perde o
+    # desenho que veio buscar. A foto fica ATRÁS da logo vazada; o respiro entre
+    # um losango e outro é a própria arte, não um buraco a tapar.
     for r in range(rows):
         for c in range(cols):
             chave = f"{r}_{c}"
-            if chave in ja_usadas:
+            if chave in pintura:
                 continue
             cy, cx = int(y0 + (r + 0.5) * passo_y), int(x0 + (c + 0.5) * passo_x)
-            na_chapa = 0 <= cy < branco.shape[0] and 0 <= cx < branco.shape[1] and branco[cy, cx]
-            if na_chapa or dentro_do_contorno[r, c]:
-                celulas.append(chave)
-                miolo += 1
+            if 0 <= cy < branco.shape[0] and 0 <= cx < branco.shape[1] and branco[cy, cx]:
+                if chave not in celulas:
+                    celulas.append(chave)
 
     print(f"      malha {rows}x{cols} passo {passo_x:.1f}x{passo_y:.1f}px -> {len(celulas)} células "
-          f"({len(pintura)} losangos tingidos, {miolo} no miolo em cor original)")
+          f"({len(pintura)} losangos vermelhos, {len(celulas) - len(pintura)} claras)")
     return {
         "rows": rows,
         "cols": cols,
@@ -204,6 +272,7 @@ def grade_do_halftone(vermelho: np.ndarray, branco: np.ndarray) -> dict | None:
         "gridHeight": int(round(rows * passo_y)),
         "customMaskCells": celulas,
         "cellFilters": pintura,
+        "objetos": vermelho | claros,
     }
 
 
@@ -222,8 +291,11 @@ def preparar(caminho: Path) -> dict:
     print(f"   {caminho.name}  {largura}x{altura}")
 
     vermelho, branco, claro_mask = separar_regioes(img)
-    logo = vermelho | claro_mask
-    
+    # `branco`, a chapa filtrada — não `claro_mask`. Todo pixel claro da arte
+    # inclui os TEXTOS, e com eles dentro do logo a caixa da grade esticava até
+    # a borda da tela e as letras viravam janela de foto.
+    logo = vermelho | branco
+
     ys, xs = np.where(logo)
     if not len(xs):
         raise ValueError(f"Não achei o logo em {caminho.name}")
@@ -233,33 +305,19 @@ def preparar(caminho: Path) -> dict:
 
     # Arte em halftone: a malha de losangos JÁ é a grade. Procurar quadrados de
     # ~250 numa arte dessas partiria losangos ao meio.
-    malha = grade_do_halftone(vermelho, branco)
+    malha = grade_do_halftone(vermelho, branco, claro_mask)
     if malha is not None:
         rows, cols = malha["rows"], malha["cols"]
         x0, y0 = malha["gridOffsetX"], malha["gridOffsetY"]
         gw, gh = malha["gridWidth"], malha["gridHeight"]
         celulas, pintura = malha["customMaskCells"], malha["cellFilters"]
 
-        # Vazado: só os objetos do logo viram janela. Aqui entra `branco`, a
-        # chapa filtrada — NÃO `claro_mask`, que é todo pixel claro da arte.
-        # Com o cru, os TEXTOS viravam janela e as fotos apareciam dentro das
-        # letras.
-        alfa = np.where(vermelho | branco, 0, 255).astype(np.uint8)
-
-        # O miolo também precisa de janela. Marcar a célula na máscara sem
-        # abrir o overlay colocava foto embaixo de chapa opaca: o meio do logo
-        # continuava preto, com as fotos escondidas atrás dele.
-        tw, th = gw / cols, gh / rows
-        for chave in celulas:
-            if chave in pintura:
-                continue  # losango: a arte já tem a janela
-            r, c = (int(v) for v in chave.split("_"))
-            xa, ya = int(round(x0 + c * tw)), int(round(y0 + r * th))
-            xb, yb = int(round(x0 + (c + 1) * tw)), int(round(y0 + (r + 1) * th))
-            xa, ya = max(0, xa), max(0, ya)
-            xb, yb = min(largura, xb), min(altura, yb)
-            if xb > xa and yb > ya:
-                alfa[ya:yb, xa:xb] = 0
+        # Vazado: só os objetos do logo viram janela — cada losango recortado no
+        # seu próprio formato. O fundo, a malha entre os losangos e os TEXTOS
+        # continuam opacos por cima do mosaico. Aqui entram os objetos que a
+        # malha já separou, NÃO `claro_mask`, que é todo pixel claro da arte:
+        # com o cru, as letras viravam janela e as fotos apareciam dentro delas.
+        alfa = np.where(malha["objetos"], 0, 255).astype(np.uint8)
         DESTINO.mkdir(parents=True, exist_ok=True)
         nome = f"{identificador(caminho.name)}.png"
         cv2.imwrite(str(DESTINO / nome), np.dstack([img, alfa]))
@@ -365,6 +423,28 @@ def main():
         cenarios.append(preparar(caminho))
 
     manifesto = DESTINO / "cenarios.json"
+
+    # Cenário cuja arte saiu de `fundos/` continua no painel enquanto o overlay
+    # dele estiver no disco.
+    #
+    # A pasta é área de trabalho: o cliente manda arte nova, alguém limpa o que
+    # não usa mais. Regerar do zero fazia esse faxina apagar do painel cenários
+    # que ainda rodavam — sem aviso, e sem como refazer, porque o original já
+    # tinha ido embora.
+    if manifesto.exists():
+        try:
+            anteriores = json.loads(manifesto.read_text(encoding="utf-8")).get("cenarios", [])
+        except (OSError, json.JSONDecodeError):
+            anteriores = []
+        gerados = {c["id"] for c in cenarios}
+        for antigo in anteriores:
+            if antigo.get("id") in gerados:
+                continue
+            if not (DESTINO / antigo.get("arquivo", "")).exists():
+                continue
+            cenarios.append(antigo)
+            print(f"   {antigo['id']:<26} preservado (arte fora de fundos/)")
+
     manifesto.write_text(json.dumps({"cenarios": cenarios}, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"\n{len(cenarios)} cenário(s) em {manifesto}")
     for c in cenarios:
