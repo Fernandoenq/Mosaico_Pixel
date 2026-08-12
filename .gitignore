@@ -193,6 +193,8 @@ video/
 _ref_frames/
 logs/
 *.mp4
+# Fotos separadas para impressão no evento: são fotos de pessoas, não código.
+impressao/
 
 # Saídas de execução (o backend recria tudo isso sozinho)
 backend/storage/hot_folder/
