@@ -1687,7 +1687,7 @@
   "photosAboveBrand": false,
   "cenarioAtual": "branco_logo",
   "fotosClaras": "original",
-  "autoPlaceMode": true,
+  "autoPlaceMode": false,
   "permitirFotosRepetidas": false,
   "layers": [
     {
