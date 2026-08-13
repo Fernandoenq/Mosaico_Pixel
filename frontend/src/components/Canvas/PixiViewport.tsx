@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import * as PIXI from 'pixi.js';
 import { useMosaicStore, MosaicStore } from '../../store/mosaicStore';
-import { animateMosaicOutro, animateTileFlight, applySpriteFilter, previewCardSize } from '../../utils/gsapAnimations';
+import { animateMosaicOutro, animateMosaicReturn, animateTileFlight, applySpriteFilter, previewCardSize } from '../../utils/gsapAnimations';
 import { MiniMap } from './MiniMap';
 import { MagnifierLens } from './MagnifierLens';
 import { TileContextMenu } from './TileContextMenu';
@@ -115,6 +115,19 @@ export const PixiViewport: React.FC = () => {
   const layer5Text = useRef<PIXI.Container | null>(null);
 
   const animationQueue = useRef<any[]>([]);
+  /**
+   * Ciclo de saída em curso (desfaz → remonta → segura parado).
+   *
+   * Enquanto está ligado a fila NÃO drena: foto que chegar espera o ciclo
+   * acabar. É isso que garante os segundos de mosaico completo e imóvel na
+   * tela — sem a trava, a primeira foto nova entrava voando por cima da
+   * imagem final que o público está fotografando.
+   */
+  const outroEmCurso = useRef(false);
+  /** Ação a executar depois que os ladrilhos forem redesenhados nas células. */
+  const aposRemontagem = useRef<null | (() => void)>(null);
+  /** Bump força o efeito de camada a redesenhar o mosaico do zero. */
+  const [remontagem, setRemontagem] = useState(0);
   // Faixas de montagem em voo agora. Era um booleano — vira contador porque o
   // telão pode animar várias fotos ao mesmo tempo com o preview desligado.
   const faixasAtivas = useRef(0);
@@ -352,10 +365,32 @@ export const PixiViewport: React.FC = () => {
       });
     };
 
+    /**
+     * Ciclo de saída, quando o mosaico fica 100% cheio:
+     *
+     *   completo → desfaz (`modo`) → remonta completo → segura `hold` segundos
+     *   parado → limpa e volta a encher.
+     *
+     * A remontagem não redesenha à mão: o `setRemontagem` força o efeito de
+     * camada a reconstruir os ladrilhos nas células a partir de `placedTiles`,
+     * que continua intacto — é por isso que o backend não apaga os tiles junto
+     * com o MOSAIC_OUTRO. Só depois disso a animação de volta roda por cima.
+     */
     const triggerOutroAnimation = (payload: any) => {
       const store = useMosaicStore.getState();
       const landed = layer1Landed.current;
+      const hold = Number.isFinite(payload?.hold) ? Math.max(0, Number(payload.hold)) : 3;
+
+      const finalizarCiclo = () => {
+        clearMosaic();
+        outroEmCurso.current = false;
+        // A fila parou de drenar durante o ciclo; o que chegou nesse meio-tempo
+        // entra agora, no mosaico já vazio.
+        processQueue();
+      };
+
       if (landed) {
+        outroEmCurso.current = true;
         animateMosaicOutro({
           landedContainer: landed,
           screenWidth: store.screenWidth,
@@ -363,9 +398,25 @@ export const PixiViewport: React.FC = () => {
           duration: store.animationDuration * 1.6,
           modo: ['dispersar', 'espalhar', 'retorno'].includes(payload?.modo)
             ? payload.modo
-            : 'dispersar',
+            : 'espalhar',
           cardSize: previewCardSize(store.screenHeight, store.previewCardScale),
-          onComplete: () => clearMosaic(),
+          onComplete: () => {
+            aposRemontagem.current = () => {
+              const container = layer1Landed.current;
+              if (!container) {
+                finalizarCiclo();
+                return;
+              }
+              animateMosaicReturn({
+                landedContainer: container,
+                duration: 1.2,
+                onComplete: () => {
+                  window.setTimeout(finalizarCiclo, hold * 1000);
+                },
+              });
+            };
+            setRemontagem((n) => n + 1);
+          },
         });
       } else {
         clearMosaic();
@@ -391,7 +442,7 @@ export const PixiViewport: React.FC = () => {
      */
     const faixaDeTrabalho = async () => {
       try {
-        while (animationQueue.current.length > 0 && !unmounted) {
+        while (animationQueue.current.length > 0 && !unmounted && !outroEmCurso.current) {
           const payload = animationQueue.current.shift();
           if (!payload) continue;
           try {
@@ -429,6 +480,8 @@ export const PixiViewport: React.FC = () => {
     };
 
     const processQueue = () => {
+      // Durante o ciclo de saída a tela pertence à imagem final: nada voa.
+      if (outroEmCurso.current) return;
       const limite = faixasDeMontagem(useMosaicStore.getState());
       // Só abre faixa nova se houver foto esperando por ela: abrir à toa
       // deixaria uma faixa girando em falso e atrasaria o encerramento.
@@ -740,7 +793,22 @@ export const PixiViewport: React.FC = () => {
 
       landedContainer.addChild(tileContainer);
     });
-  }, [placedTiles, cellFilters, gridOffsetX, gridOffsetY, gridWidth, gridHeight, rows, cols, gridShape, gridContainerShape, screenWidth, screenHeight, customMaskCells]);
+    // `remontagem` entra aqui para o ciclo de saída conseguir reconstruir os
+    // ladrilhos depois que a dispersão esvaziou o container. `placedTiles` não
+    // muda nessa hora, então sem este contador o efeito não rodaria de novo.
+  }, [placedTiles, cellFilters, gridOffsetX, gridOffsetY, gridWidth, gridHeight, rows, cols, gridShape, gridContainerShape, screenWidth, screenHeight, customMaskCells, remontagem]);
+
+  /**
+   * Roda a animação de volta DEPOIS que o efeito acima redesenhou os ladrilhos.
+   * A ordem importa: declarado após o efeito de camada, este roda em seguida no
+   * mesmo commit, com os filhos já no container.
+   */
+  useEffect(() => {
+    if (remontagem === 0) return;
+    const acao = aposRemontagem.current;
+    aposRemontagem.current = null;
+    acao?.();
+  }, [remontagem]);
 
   useEffect(() => {
     if (!layer3Grid.current) return;

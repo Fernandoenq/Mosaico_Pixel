@@ -44,6 +44,10 @@ ANIMATION_PRESETS = {
     "wave",
     "flip_3d",
 }
+# Como o mosaico se desfaz quando fica 100% cheio.
+# `espalhar` é o do vídeo de referência do cliente, medido quadro a quadro:
+# cada ladrilho anda pouco e apaga quase junto, sem voar para fora da tela.
+OUTRO_MODES = {"dispersar", "espalhar", "retorno"}
 FILL_SEQUENCES = {
     "color_match",
     "top_to_bottom",
@@ -136,6 +140,12 @@ DEFAULTS: dict[str, Any] = {
     "cenarioAtual": None,
     # O que acontece nas celulas do BRANCO do logo: "original" ou "branco".
     "fotosClaras": "original",
+    # Quantos losangos da malha impressa na arte cada foto cobre (NxN).
+    # 1 = uma foto por losango (o desenho original do cliente). 2 = cada foto
+    # cobre 4 losangos: o logo fica do MESMO tamanho na tela, com 1/4 das fotos
+    # e cada ladrilho o dobro de largo. E o botao para o mosaico fechar mais
+    # rapido sem trocar a arte.
+    "cenarioAgrupamento": 1,
     "autoPlaceMode": True,
     # Aceita no mosaico duas fotos de conteudo identico. A cabine publica o
     # mesmo arquivo com dois nomes (`img_Nmasked` e `originals/...`); desligado,
@@ -145,10 +155,16 @@ DEFAULTS: dict[str, Any] = {
     "permitirFotosRepetidas": False,
     # Camadas
     "layers": DEFAULT_LAYERS,
-    # Saída automática ao completar o mosaico
+    # Saída automática ao completar o mosaico. O ciclo é:
+    #   cheio → espera `autoOutroDelaySeconds` → desfaz (`outroMode`) →
+    #   remonta completo → segura `outroHoldSeconds` parado → limpa e enche de novo.
     "autoOutroOnComplete": True,
-    "outroMode": "dispersar",
+    "outroMode": "espalhar",
     "autoOutroDelaySeconds": 3.0,
+    # Quanto tempo o mosaico completo fica parado na tela depois de remontar,
+    # antes de limpar e recomeçar. Nenhuma foto nova anima durante esse tempo:
+    # é o respiro para quem está na frente do telão fotografar o resultado.
+    "outroHoldSeconds": 3.0,
 }
 
 
@@ -301,9 +317,17 @@ COERCERS: dict[str, Callable[[Any, Any], Any]] = {
     "photosAboveBrand": _bool,
     "cenarioAtual": _nullable_text,
     "fotosClaras": _enum(("original", "branco")),
+    "cenarioAgrupamento": _int(1, 6),
     "autoPlaceMode": _bool,
     "permitirFotosRepetidas": _bool,
     "layers": _layers,
+    # Estas quatro faltavam aqui: sem coercer, `merge_patch` descarta a chave em
+    # silêncio e o valor do painel nunca chegava a valer. Os controles de saída
+    # no Animation Studio eram decorativos — o modo ficava preso no default.
+    "autoOutroOnComplete": _bool,
+    "outroMode": _enum(OUTRO_MODES),
+    "autoOutroDelaySeconds": _float(0.0, 60.0),
+    "outroHoldSeconds": _float(0.0, 30.0),
 }
 
 

@@ -76,6 +76,7 @@ export const RUN_CONFIG_KEYS = [
   'autoOutroOnComplete',
   'outroMode',
   'autoOutroDelaySeconds',
+  'outroHoldSeconds',
   'layers',
 ] as const;
 
@@ -143,6 +144,8 @@ export interface MosaicStore {
   autoOutroOnComplete: boolean;
   outroMode: 'dispersar' | 'retorno' | 'espalhar';
   autoOutroDelaySeconds: number;
+  /** Segundos com o mosaico completo e imóvel depois de remontar, antes de limpar. */
+  outroHoldSeconds: number;
 
   // State Arrays
   pendingPhotos: PendingPhoto[];
@@ -289,8 +292,9 @@ export const useMosaicStore = create<MosaicStore>()(
       foregroundUrl: null,
       photosAboveBrand: false,
       autoOutroOnComplete: true,
-      outroMode: "dispersar",
+      outroMode: "espalhar",
       autoOutroDelaySeconds: 3.0,
+      outroHoldSeconds: 3.0,
 
       pendingPhotos: [],
       approvedPhotos: [],

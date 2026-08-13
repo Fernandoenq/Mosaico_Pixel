@@ -77,6 +77,7 @@ export const AnimationStudio: React.FC = () => {
     autoOutroOnComplete,
     outroMode,
     autoOutroDelaySeconds,
+    outroHoldSeconds,
     setAnimationConfig,
     setCentralPreviewDuration,
     setCentralPreviewEnabled,
@@ -421,15 +422,15 @@ export const AnimationStudio: React.FC = () => {
                 onChange={(e) => useMosaicStore.setState({ outroMode: e.target.value as any })}
                 className="bg-slate-800 text-xs text-rose-300 font-semibold px-2 py-1 rounded border border-slate-600"
               >
-                <option value="dispersar">💥 Dispersar para Fora (Vídeo)</option>
-                <option value="espalhar">✨ Espalhar Suave</option>
+                <option value="espalhar">✨ Espalhar no Lugar (Vídeo)</option>
+                <option value="dispersar">💥 Dispersar para Fora</option>
                 <option value="retorno">🌀 Recolher para o Centro</option>
               </select>
             </div>
 
             <div className="flex flex-col gap-1">
               <div className="flex justify-between text-xs text-slate-400">
-                <span>Pausa com mosaico cheio</span>
+                <span>Pausa antes de desfazer</span>
                 <span className="font-mono text-rose-300">{(autoOutroDelaySeconds ?? 3).toFixed(1)}s</span>
               </div>
               <input
@@ -441,6 +442,27 @@ export const AnimationStudio: React.FC = () => {
                 onChange={(e) => useMosaicStore.setState({ autoOutroDelaySeconds: parseFloat(e.target.value) })}
                 className="w-full h-1.5 bg-slate-700 rounded appearance-none cursor-pointer accent-rose-400"
               />
+            </div>
+
+            {/* O respiro DEPOIS da volta: mosaico completo e imóvel na tela. */}
+            <div className="flex flex-col gap-1">
+              <div className="flex justify-between text-xs text-slate-400">
+                <span>Mosaico completo parado (após remontar)</span>
+                <span className="font-mono text-emerald-300">{(outroHoldSeconds ?? 3).toFixed(1)}s</span>
+              </div>
+              <input
+                type="range"
+                min="0"
+                max="15"
+                step="0.5"
+                value={outroHoldSeconds ?? 3}
+                onChange={(e) => useMosaicStore.setState({ outroHoldSeconds: parseFloat(e.target.value) })}
+                className="w-full h-1.5 bg-slate-700 rounded appearance-none cursor-pointer accent-emerald-400"
+              />
+              <p className="text-[10px] text-slate-500 leading-snug">
+                Ciclo: cheio → desfaz → remonta → fica parado este tempo (sem
+                foto nova entrando) → limpa e volta a encher.
+              </p>
             </div>
           </div>
         )}

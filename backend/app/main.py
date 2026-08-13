@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
-from typing import List, Optional
+from typing import Any, List, Optional
 import uuid
 import time
 import hashlib
@@ -13,6 +13,7 @@ import cv2
 import numpy as np
 from pathlib import Path
 import json
+import math
 import asyncio
 from typing import List
 
@@ -134,6 +135,10 @@ def _ingest_image(img_bgr, photo_id: str, content_hash: str, origem: str):
             "target_y": r * state.engine.tile_h,
             "score": best_score,
         })
+        # Este é o caminho que roda num evento de verdade (Auto-Place ligado) e
+        # era o único que não perguntava se o mosaico tinha acabado de fechar:
+        # enchia até a última célula e a animação final nunca disparava.
+        check_auto_outro()
 
 
 def on_hot_folder_file(file_path: Path):
@@ -573,6 +578,12 @@ async def run_transport(action: str):
                         state.register_tile_url(item["id"], item["url"])
                         await broadcast_event("TILE_PLACED", payload)
                         await asyncio.sleep(0.15)  # Dá respiro pro event loop e cria efeito cascata visual
+
+        # O mosaico pode JÁ estar cheio na hora do Play — é o que acontece
+        # quando o operador enche com duplicatas ainda em idle e só então dá
+        # Play. Sem esta verificação a saída nunca dispararia: as outras só
+        # rodam quando um tile pousa, e não há mais célula onde pousar.
+        check_auto_outro()
     elif action == "pause":
         state.set_run_state("paused")
     elif action == "stop":
@@ -1135,7 +1146,39 @@ async def remove_duplicates():
         "originais": restantes,
     }
 
-_outro_task: Optional[asyncio.Task] = None
+# Pode ser um asyncio.Task (agendado de dentro do loop) ou um
+# concurrent.futures.Future (agendado de uma thread). Os dois expõem
+# `.done()` e `.cancel()`, que é tudo o que usamos aqui.
+_outro_task: Any = None
+_outro_limpeza_task: Optional[asyncio.Task] = None
+
+# Folga para a parte animada do ciclo (desfazer + remontar) antes de liberar as
+# células. O telão desfaz em até ~0,9s e remonta em ~1,2s; 3s cobre os dois com
+# sobra mesmo num telão lento. Só o `hold` é configurável — este é o piso
+# técnico, e ele precisa continuar MAIOR que a soma das duas animações no
+# frontend (animateMosaicOutro + animateMosaicReturn).
+OUTRO_MARGEM_ANIMACAO = 3.0
+
+
+async def _limpar_apos_outro(espera: float):
+    """
+    Libera as células depois que o telão terminou de remontar e segurar a
+    imagem final. Enquanto isso o mosaico segue cheio de propósito — é a foto
+    que o público está tirando da tela.
+    """
+    try:
+        await asyncio.sleep(espera)
+        tile_count = len(state.engine.placed_tiles)
+        state.engine.placed_tiles.clear()
+        state.engine.locked_tiles.clear()
+        state.tile_urls.clear()
+        await broadcast_event("MOSAIC_RESET", {"motivo": "outro", "tiles": tile_count})
+        print(f"[AutoOutro] Ciclo concluído: {tile_count} célula(s) liberadas, o mosaico volta a encher.")
+    except asyncio.CancelledError:
+        pass
+    except Exception as exc:
+        print(f"[AutoOutro] Erro ao limpar depois da dispersão: {exc}")
+
 
 async def _trigger_auto_outro_after_delay(delay: float, modo: str):
     try:
@@ -1149,19 +1192,45 @@ async def _trigger_auto_outro_after_delay(delay: float, modo: str):
         print(f"[AutoOutro] Erro ao disparar dispersão automática: {exc}")
 
 def check_auto_outro():
+    """
+    Mosaico cheio? Agenda o ciclo de saída.
+
+    Chamada tanto de dentro do event loop (duplicação, auto-fill) quanto de
+    THREAD (ingestão de foto, aprovação) — por isso não usa
+    `asyncio.get_running_loop()`: numa thread ele levanta RuntimeError, e o
+    `except` engolia a exceção. O mosaico enchia de fotos reais e a animação
+    final simplesmente nunca acontecia, sem uma linha de log.
+    """
     global _outro_task
     if not state.config.get("autoOutroOnComplete", True):
         return
-    if len(state.engine.available_cells()) == 0 and len(state.engine.placed_tiles) > 0 and state.run_state == "running":
-        if _outro_task is None or _outro_task.done():
-            delay = float(state.config.get("autoOutroDelaySeconds", 3.0))
-            modo = str(state.config.get("outroMode", "dispersar"))
-            print(f"[AutoOutro] Mosaico preenchido! Agendando dispersão automática ({modo}) em {delay}s...")
-            try:
-                loop = asyncio.get_running_loop()
-                _outro_task = loop.create_task(_trigger_auto_outro_after_delay(delay, modo))
-            except RuntimeError:
-                pass
+    if len(state.engine.available_cells()) != 0 or len(state.engine.placed_tiles) == 0:
+        return
+    if state.run_state != "running":
+        return
+    if _outro_task is not None and not _outro_task.done():
+        return
+
+    delay = float(state.config.get("autoOutroDelaySeconds", 3.0))
+    modo = str(state.config.get("outroMode", "espalhar"))
+    print(f"[AutoOutro] Mosaico preenchido! Agendando saída ({modo}) em {delay}s...")
+
+    if not (main_loop and main_loop.is_running()):
+        print("[AutoOutro] Loop principal indisponível; saída não agendada.")
+        return
+
+    corrotina = _trigger_auto_outro_after_delay(delay, modo)
+    try:
+        loop_atual = asyncio.get_running_loop()
+    except RuntimeError:
+        loop_atual = None
+
+    if loop_atual is main_loop:
+        _outro_task = main_loop.create_task(corrotina)
+    else:
+        # De outra thread: agenda no loop principal e guarda o Future só para o
+        # teste de "já tem um ciclo em andamento" continuar valendo.
+        _outro_task = asyncio.run_coroutine_threadsafe(corrotina, main_loop)
 
 def cancel_auto_outro():
     global _outro_task
@@ -1185,11 +1254,28 @@ async def play_mosaic_outro(modo: str = "dispersar"):
     if modo not in ("retorno", "dispersar", "espalhar"):
         raise HTTPException(status_code=400, detail=f"Modo de saída inválido: {modo}")
 
+    global _outro_limpeza_task
+
     tile_count = len(state.engine.placed_tiles)
-    await broadcast_event("MOSAIC_OUTRO", {"tile_count": tile_count, "modo": modo})
-    state.engine.placed_tiles.clear()
-    state.engine.locked_tiles.clear()
-    return {"status": "success", "dispersed_tiles": tile_count}
+    hold = float(state.config.get("outroHoldSeconds", 3.0))
+    await broadcast_event("MOSAIC_OUTRO", {"tile_count": tile_count, "modo": modo, "hold": hold})
+
+    # Os tiles NÃO são apagados aqui. O telão ainda vai remontar o mosaico
+    # completo e segurá-lo parado por `hold` segundos; limpar agora liberaria as
+    # células e uma foto nova entraria por baixo da imagem final. Quem limpa é a
+    # tarefa abaixo, no fim do ciclo.
+    if _outro_limpeza_task and not _outro_limpeza_task.done():
+        _outro_limpeza_task.cancel()
+    try:
+        loop = asyncio.get_running_loop()
+        _outro_limpeza_task = loop.create_task(_limpar_apos_outro(hold + OUTRO_MARGEM_ANIMACAO))
+    except RuntimeError:
+        # Sem event loop (chamada fora do servidor): limpa na hora, senão o
+        # mosaico ficaria cheio para sempre e nada mais entraria.
+        state.engine.placed_tiles.clear()
+        state.engine.locked_tiles.clear()
+
+    return {"status": "success", "dispersed_tiles": tile_count, "hold": hold}
 
 @app.post("/api/mosaic/layers")
 async def update_layers(layers: List[dict]):
@@ -1470,8 +1556,65 @@ async def listar_cenarios():
     }
 
 
+def _agrupar_malha(
+    rows: int,
+    cols: int,
+    mask_cells: list[str],
+    cell_filters: dict[str, str],
+    fator: int,
+) -> tuple[int, int, list[str], dict[str, str]]:
+    """
+    Junta blocos de `fator`x`fator` células da malha numa célula só.
+
+    Serve para fechar o mosaico com menos fotos SEM encolher o logo: a área da
+    grade não muda, então cada ladrilho fica `fator` vezes maior. Com fator 2 as
+    823 células da arte viram ~206, e cada foto passa a cobrir quatro losangos
+    do halftone impresso — o desenho continua o mesmo, com menos resolução.
+
+    Uma célula agrupada entra na máscara quando METADE ou mais das células
+    originais dentro dela estavam na máscara. Com um limite mais frouxo o
+    mosaico transborda o contorno do logo; mais apertado, come as bordas.
+
+    A pintura segue a maioria do bloco: o que vale é a cor que domina a área que
+    a foto vai cobrir.
+    """
+    if fator <= 1:
+        return rows, cols, list(mask_cells), dict(cell_filters)
+
+    originais = set(mask_cells)
+    blocos: dict[tuple[int, int], list[str]] = {}
+    for chave in originais:
+        try:
+            r, c = (int(p) for p in chave.split("_", 1))
+        except ValueError:
+            continue
+        blocos.setdefault((r // fator, c // fator), []).append(chave)
+
+    novas_rows = math.ceil(rows / fator)
+    novas_cols = math.ceil(cols / fator)
+    nova_mascara: list[str] = []
+    nova_pintura: dict[str, str] = {}
+
+    for (br, bc), membros in sorted(blocos.items()):
+        # Quantas células o bloco teria se estivesse inteiro dentro da grade.
+        altura = min(fator, rows - br * fator)
+        largura = min(fator, cols - bc * fator)
+        capacidade = max(1, altura * largura)
+        if len(membros) / capacidade < 0.5:
+            continue
+
+        chave = f"{br}_{bc}"
+        nova_mascara.append(chave)
+
+        tintas = [cell_filters[m] for m in membros if m in cell_filters]
+        if tintas:
+            nova_pintura[chave] = max(set(tintas), key=tintas.count)
+
+    return novas_rows, novas_cols, nova_mascara, nova_pintura
+
+
 @app.post("/api/cenarios/{cenario_id}/aplicar")
-async def aplicar_cenario(cenario_id: str, fotosClaras: str = "original"):
+async def aplicar_cenario(cenario_id: str, fotosClaras: str = "original", agrupamento: int = 1):
     """
     Troca o cenário inteiro numa tacada: resolução do telão, arte, grade,
     recorte no formato do logo e a pintura de cada célula.
@@ -1492,22 +1635,36 @@ async def aplicar_cenario(cenario_id: str, fotosClaras: str = "original"):
     if not arquivo.exists():
         raise HTTPException(status_code=409, detail=f"Arte do cenário não está no disco: {cenario['arquivo']}")
 
+    fator = max(1, min(6, int(agrupamento)))
+
     pintura = dict(cenario["cellFilters"])
     if fotosClaras == "branco":
         # As claras são as células do branco do logo — as que não têm tinta.
         for chave in cenario["customMaskCells"]:
             pintura.setdefault(chave, "branco_leve")
 
+    # O agrupamento entra DEPOIS do fotosClaras: assim a maioria do bloco é
+    # calculada já com a pintura final, e não sobra bloco sem tinta.
+    rows, cols, mascara, pintura = _agrupar_malha(
+        cenario["rows"], cenario["cols"], cenario["customMaskCells"], pintura, fator
+    )
+    if fator > 1:
+        print(
+            f"[Cenários] Agrupamento {fator}x{fator}: "
+            f"{cenario['rows']}x{cenario['cols']} ({len(cenario['customMaskCells'])} células) "
+            f"-> {rows}x{cols} ({len(mascara)} células)"
+        )
+
     config = state.apply_config({
         "screenWidth": cenario["screenWidth"],
         "screenHeight": cenario["screenHeight"],
-        "rows": cenario["rows"],
-        "cols": cenario["cols"],
+        "rows": rows,
+        "cols": cols,
         "gridOffsetX": cenario["gridOffsetX"],
         "gridOffsetY": cenario["gridOffsetY"],
         "gridWidth": cenario["gridWidth"],
         "gridHeight": cenario["gridHeight"],
-        "customMaskCells": cenario["customMaskCells"],
+        "customMaskCells": mascara,
         "gridContainerShape": "custom_mask",
         # Quadrado, não losango: o logo novo é cheio, e o ladrilho tem que
         # cobrir a célula inteira. Foi o losango sobre a arte picotada que
@@ -1522,18 +1679,24 @@ async def aplicar_cenario(cenario_id: str, fotosClaras: str = "original"):
         "targetBaseUrl": f"/storage/cenarios/{cenario['arquivo']}?t={uuid.uuid4().hex[:8]}",
         "cenarioAtual": cenario_id,
         "fotosClaras": fotosClaras,
+        "cenarioAgrupamento": fator,
     })
 
     orfaos = state.engine.purge_tiles_outside_container()
     await broadcast_event("CONFIG_UPDATED", config)
 
-    print(f"[Cenários] {cenario_id} aplicado: {cenario['celulasNoLogo']} células, fotos claras={fotosClaras}")
+    print(
+        f"[Cenários] {cenario_id} aplicado: {len(mascara)} células "
+        f"(agrupamento {fator}x{fator}), fotos claras={fotosClaras}"
+    )
     return {
         "status": "success",
         "cenario": cenario_id,
         "telao": f"{cenario['screenWidth']}x{cenario['screenHeight']}",
-        "grade": f"{cenario['rows']}x{cenario['cols']}",
-        "celulas": cenario["celulasNoLogo"],
+        "grade": f"{rows}x{cols}",
+        "celulas": len(mascara),
+        "celulasOriginais": cenario["celulasNoLogo"],
+        "agrupamento": fator,
         "liberados": len(orfaos),
     }
 
@@ -1788,12 +1951,30 @@ async def start_video_marca(opcoes: OpcoesVideoMarca | None = None):
 
 
 def _caminho_overlay() -> Path | None:
-    """Arquivo local do overlay publicado na config, se existir."""
+    """
+    Arquivo local do overlay publicado na config, se existir.
+
+    Preserva o caminho DENTRO de storage/. Antes só o nome do arquivo era
+    aproveitado, e o overlay de um cenário — que mora em `storage/cenarios/` —
+    nunca era encontrado: "Abrir o miolo" respondia 409 dizendo que não havia
+    overlay configurado, com a arte do cenário na tela.
+    """
     url = state.config.get("foregroundUrl")
     if not url:
         return None
-    nome = url.split("?")[0].rsplit("/", 1)[-1]
-    caminho = settings.STORAGE_DIR / nome
+
+    relativo = url.split("?")[0].lstrip("/")
+    if relativo.startswith("storage/"):
+        relativo = relativo[len("storage/"):]
+
+    # `..` numa URL não pode escapar de storage/.
+    caminho = (settings.STORAGE_DIR / relativo).resolve()
+    try:
+        caminho.relative_to(settings.STORAGE_DIR.resolve())
+    except ValueError:
+        print(f"[Overlay] Caminho fora de storage/, ignorado: {url}")
+        return None
+
     return caminho if caminho.exists() else None
 
 

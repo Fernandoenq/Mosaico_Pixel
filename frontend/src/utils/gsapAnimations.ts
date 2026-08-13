@@ -505,6 +505,73 @@ export const animateMosaicOutro = ({
   });
 };
 
+export interface MosaicReturnParams {
+  landedContainer: PIXI.Container;
+  duration?: number;
+  onComplete?: () => void;
+}
+
+/**
+ * ↩️ A volta: o mosaico se remonta inteiro depois de se desfazer.
+ *
+ * É o `espalhar` ao contrário. Cada ladrilho já está desenhado na célula certa
+ * (quem redesenha é o efeito de camada do PixiViewport); aqui ele é jogado para
+ * trás — deslocado, transparente e um pouco menor — e trazido de volta ao
+ * lugar. O resultado é o mosaico se juntando no ar em vez de simplesmente
+ * reaparecer num piscar.
+ *
+ * O deslocamento inicial usa o mesmo ângulo áureo da saída, então cada ladrilho
+ * volta pelo caminho por onde saiu, e sem `Math.random` dois telões lado a lado
+ * remontam idênticos.
+ */
+export const animateMosaicReturn = ({
+  landedContainer,
+  duration = 1.2,
+  onComplete,
+}: MosaicReturnParams) => {
+  const tiles = [...landedContainer.children] as PIXI.Container[];
+  if (tiles.length === 0) {
+    onComplete?.();
+    return;
+  }
+
+  let remaining = tiles.length;
+  const terminar = () => {
+    remaining -= 1;
+    if (remaining === 0) onComplete?.();
+  };
+
+  tiles.forEach((tile, index) => {
+    const angulo = (index * 2.39996) % (Math.PI * 2); // mesmo ângulo áureo da saída
+    const alcance = 40 + ((index * 37) % 90);
+    const atraso = (((index * 13) % 100) / 100) * 0.25;
+
+    const destinoX = tile.x;
+    const destinoY = tile.y;
+
+    // Ponto de partida: onde o ladrilho estaria no fim da dispersão.
+    tile.x = destinoX + Math.cos(angulo) * alcance;
+    tile.y = destinoY + Math.sin(angulo) * alcance;
+    tile.alpha = 0;
+
+    gsap.to(tile, {
+      duration,
+      delay: atraso,
+      x: destinoX,
+      y: destinoY,
+      rotation: 0,
+      ease: 'power2.out',
+    });
+    gsap.to(tile, {
+      duration: duration * 0.6,
+      delay: atraso,
+      alpha: 1,
+      ease: 'power1.out',
+      onComplete: terminar,
+    });
+  });
+};
+
 /**
  * Animação de FLIP (troca manual de foto via modal Left-Click).
  */

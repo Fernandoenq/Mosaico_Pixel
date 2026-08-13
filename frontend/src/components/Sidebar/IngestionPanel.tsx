@@ -299,6 +299,14 @@ export const IngestionPanel: React.FC = () => {
   const [fotosClaras, setFotosClaras] = useState<'original' | 'branco'>('original');
   const [trocandoCenario, setTrocandoCenario] = useState<string | null>(null);
   const [resultadoCenario, setResultadoCenario] = useState<string>('');
+  /**
+   * Quantos losangos da arte cada foto cobre (NxN).
+   *
+   * O logo NÃO muda de tamanho na tela: a área da grade é a mesma, então
+   * agrupar só deixa cada ladrilho maior e reduz quantas fotos fecham o
+   * mosaico. É o botão para o telão fechar mais rápido sem trocar a arte.
+   */
+  const [agrupamento, setAgrupamento] = useState(1);
 
   useEffect(() => {
     fetch('/api/cenarios')
@@ -315,17 +323,21 @@ export const IngestionPanel: React.FC = () => {
    * pintura das células. Tudo vem pronto do backend — os valores foram
    * calculados em cima da arte do cliente e conferidos uma vez.
    */
-  const handleCenario = async (id: string, claras: 'original' | 'branco') => {
+  const handleCenario = async (id: string, claras: 'original' | 'branco', fator = agrupamento) => {
     setTrocandoCenario(id);
     setResultadoCenario('');
     try {
-      const res = await fetch(`/api/cenarios/${id}/aplicar?fotosClaras=${claras}`, { method: 'POST' });
+      const res = await fetch(
+        `/api/cenarios/${id}/aplicar?fotosClaras=${claras}&agrupamento=${fator}`,
+        { method: 'POST' },
+      );
       const dados = await res.json();
       if (!res.ok) throw new Error(dados?.detail || 'Falha ao aplicar o cenário');
       setCenarioAtual(id);
       setFotosClaras(claras);
       setResultadoCenario(
         `${dados.telao} · grade ${dados.grade} · ${dados.celulas} células` +
+        (dados.agrupamento > 1 ? ` (agrupadas ${dados.agrupamento}×${dados.agrupamento} de ${dados.celulasOriginais})` : '') +
         (dados.liberados ? ` · ${dados.liberados} ladrilho(s) fora do novo desenho foram liberados` : ''),
       );
       const cfg = await fetch('/api/config').then((r) => r.json());
@@ -741,10 +753,48 @@ export const IngestionPanel: React.FC = () => {
               <div className="text-[9px] text-slate-400 leading-snug">
                 {trocandoCenario === cen.id
                   ? 'aplicando...'
-                  : `${cen.celulas} células — ${cen.vermelhas} no vermelho, ${cen.claras} no branco`}
+                  : agrupamento > 1
+                    ? `~${Math.round(cen.celulas / (agrupamento * agrupamento))} células agrupadas (de ${cen.celulas})`
+                    : `${cen.celulas} células — ${cen.vermelhas} no vermelho, ${cen.claras} no branco`}
               </div>
             </button>
           ))}
+        </div>
+
+        {/*
+          Tamanho do ladrilho. O logo NÃO encolhe: a área da grade é a mesma, só
+          o número de células cai. Cada foto passa a cobrir NxN losangos da arte.
+        */}
+        <div className="flex flex-col gap-1 pt-2 border-t border-slate-700/50">
+          <div className="flex justify-between text-[10px] text-slate-400">
+            <span>Tamanho do ladrilho</span>
+            <span className="font-mono text-cyan-300">
+              {agrupamento === 1 ? 'original' : `${agrupamento}× maior`}
+            </span>
+          </div>
+          <div className="flex gap-1">
+            {[1, 2, 3, 4, 5, 6].map((f) => (
+              <button
+                key={f}
+                onClick={() => {
+                  setAgrupamento(f);
+                  if (cenarioAtual) handleCenario(cenarioAtual, fotosClaras, f);
+                }}
+                disabled={trocandoCenario !== null}
+                className={`flex-1 py-1 rounded text-[10px] font-bold border transition active:scale-95 disabled:opacity-50 ${
+                  agrupamento === f
+                    ? 'bg-cyan-600/30 border-cyan-400/60 text-cyan-200'
+                    : 'bg-slate-900 border-slate-700 text-slate-400 hover:bg-slate-800'
+                }`}
+              >
+                {f}×
+              </button>
+            ))}
+          </div>
+          <p className="text-[9px] text-slate-500 leading-snug">
+            Menos fotos para fechar o mosaico, cada uma maior — o logo continua
+            do mesmo tamanho na tela.
+          </p>
         </div>
 
         {/* O que acontece nas células do BRANCO do logo. */}

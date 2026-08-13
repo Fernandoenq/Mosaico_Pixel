@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import json
 import re
+import sys
 from pathlib import Path
 
 import cv2
@@ -34,6 +35,25 @@ import numpy as np
 RAIZ = Path(__file__).resolve().parent.parent
 ORIGEM = RAIZ / "fundos"
 DESTINO = RAIZ / "backend" / "storage" / "cenarios"
+
+# O módulo do miolo vive no backend; o script é operação, não parte do servidor.
+if str(RAIZ / "backend") not in sys.path:
+    sys.path.insert(0, str(RAIZ / "backend"))
+
+# Artes em que o MIOLO da marca também recebe foto.
+#
+# Nestas o meio do desenho é chapa escura: o contorno enche de gente e o centro
+# fica um buraco preto. Aqui a mesma malha é estendida para dentro dele, com um
+# losango recortado por célula.
+#
+# É uma lista explícita, não um padrão global, porque nem toda arte quer isso:
+# em `branco_logo` o miolo já é parte do logo (não sobra nada para abrir), e em
+# `camada_0`, `camada_1` e `preto_logo` abrir mudaria de 250 a 355 células de
+# cenários que já rodaram em evento.
+ABRIR_MIOLO = {
+    "telao_maior_3840x2160",
+    "telao_menor_3840x1920",
+}
 
 # Quantas células de foto o cliente quer ver dentro do logo.
 ALVO_CELULAS = 250
@@ -412,6 +432,44 @@ def preparar(caminho: Path) -> dict:
     }
 
 
+def abrir_miolo(cenario: dict) -> dict:
+    """
+    Estende a malha para dentro do miolo da marca e recorta a janela de cada
+    célula nova no overlay já gerado.
+
+    Roda aqui, na preparação, e não no botão do painel: assim o cenário nasce
+    completo, o número de células no manifesto é o real e o agrupamento de
+    ladrilhos parte da máscara inteira — incluindo o miolo.
+    """
+    from app.services.meio_da_marca import celulas_do_miolo, recortar_losangos
+
+    novas = celulas_do_miolo(
+        cenario["customMaskCells"], cenario["rows"], cenario["cols"]
+    )
+    if not novas:
+        print("      miolo: nada a abrir (já faz parte do desenho)")
+        return cenario
+
+    overlay = DESTINO / cenario["arquivo"]
+    recortados = recortar_losangos(
+        overlay, overlay, novas,
+        cenario["rows"], cenario["cols"],
+        float(cenario["gridOffsetX"]), float(cenario["gridOffsetY"]),
+        float(cenario["gridWidth"]), float(cenario["gridHeight"]),
+        int(cenario["screenWidth"]), int(cenario["screenHeight"]),
+    )
+
+    cenario["customMaskCells"] = list(cenario["customMaskCells"]) + novas
+    cenario["celulasNoLogo"] = len(cenario["customMaskCells"])
+    # As do miolo entram SEM pintura: a foto fica na cor original, e é ali que
+    # as pessoas se veem como são. O contorno da marca segue tingido.
+    cenario["celulasClaras"] = cenario["celulasNoLogo"] - cenario["celulasVermelhas"]
+
+    print(f"      miolo: +{len(novas)} células ({recortados} losangos recortados) "
+          f"-> {cenario['celulasNoLogo']} no total")
+    return cenario
+
+
 def main():
     if not ORIGEM.exists():
         raise SystemExit(f"Pasta das artes não encontrada: {ORIGEM}")
@@ -420,7 +478,10 @@ def main():
     for caminho in sorted(ORIGEM.iterdir()):
         if caminho.suffix.lower() not in (".png", ".jpg", ".jpeg"):
             continue
-        cenarios.append(preparar(caminho))
+        cenario = preparar(caminho)
+        if cenario["id"] in ABRIR_MIOLO:
+            cenario = abrir_miolo(cenario)
+        cenarios.append(cenario)
 
     manifesto = DESTINO / "cenarios.json"
 

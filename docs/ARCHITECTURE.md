@@ -117,13 +117,65 @@ o telão leva para exibir a cópia anterior (hold do preview + voo + respiro).
 Sem isso ele soltava uma cópia a cada 3s enquanto cada uma leva uns 12s na
 tela, e a fila crescia sem fim.
 
-O **miolo da marca** (`POST /api/mosaic/abrir-miolo-da-marca`) estende a malha
-de losangos para dentro da chapa preta do meio do logo: recorta um losango por
-célula vaga do contorno e soma essas células à máscara, sem pintura — a foto
-fica na cor original. Os respiros do halftone não são tapados (blocos contínuos
-sim, células soltas não), senão o degradê da ponta da marca some. A arte
-original vai para `foreground_sem_miolo.png` e
-`POST /api/mosaic/restaurar-marca-original` a devolve.
+O **miolo da marca** estende a malha de losangos para dentro da chapa preta do
+meio do logo: recorta um losango por célula vaga do contorno e soma essas
+células à máscara, sem pintura — a foto fica na cor original. Os respiros do
+halftone não são tapados (blocos contínuos sim, células soltas não), senão o
+degradê da ponta da marca some. Há dois caminhos:
+
+- **Na preparação**, para as artes listadas em `ABRIR_MIOLO` no
+  `tools/preparar_cenarios.py`. O cenário já nasce com o miolo aberto, o número
+  de células no manifesto é o real e o agrupamento de ladrilhos parte da máscara
+  inteira. É o caminho preferido.
+- **Ao vivo**, por `POST /api/mosaic/abrir-miolo-da-marca`. A arte original vai
+  para `<overlay>_sem_miolo.png` e `POST /api/mosaic/restaurar-marca-original` a
+  devolve. Aqui a ordem importa: escolha o agrupamento ANTES, porque trocá-lo
+  recalcula a máscara sem as células do miolo e o meio vira buraco preto.
+
+### Tamanho do ladrilho (`cenarioAgrupamento`)
+
+`POST /api/cenarios/{id}/aplicar?agrupamento=N` junta blocos de NxN células da
+malha numa célula só. **O logo não muda de tamanho na tela** — a área da grade é
+a mesma —, então cada ladrilho fica N vezes maior e o mosaico fecha com menos
+fotos. É o botão para encurtar o evento sem trocar a arte:
+
+| Fator | Grade (branco_logo) | Células | Ladrilho |
+| --- | --- | --- | --- |
+| 1× | 25×45 | 823 | 38px |
+| 2× | 13×23 | 215 | 74px |
+| 3× | 9×15 | 96 | 113px |
+| 4× | 7×12 | 59 | 141px |
+
+Uma célula agrupada entra na máscara quando **metade ou mais** das originais
+dentro dela estavam na máscara; mais frouxo transborda o contorno do logo, mais
+apertado come as bordas. A pintura segue a maioria do bloco. O desenho se lê bem
+até 2×; de 3× em diante as pontas ficam quadradas.
+
+### Quando o mosaico fecha
+
+Com `autoOutroOnComplete` ligado, encher a última célula dispara um ciclo:
+
+```text
+CHEIO ──autoOutroDelaySeconds──▶ DESFAZ (outroMode) ──▶ REMONTA COMPLETO
+                                                              │
+   ┌────── limpa e volta a encher ◀── outroHoldSeconds parado ─┘
+```
+
+Durante todo o ciclo a fila do telão **congela**: foto que chegar espera. É isso
+que garante os segundos de mosaico completo e imóvel — o respiro para o público
+fotografar o resultado. O backend só libera as células no fim (`hold` +
+`OUTRO_MARGEM_ANIMACAO`), e não junto com o `MOSAIC_OUTRO`: limpar antes deixaria
+uma foto nova entrar por baixo da imagem final.
+
+`espalhar` é o modo do vídeo de referência do cliente, medido quadro a quadro: em
+`t=12,70s` o mosaico está inteiro e em `t=12,80s` sumiu — os ladrilhos andam
+pouco e apagam quase juntos, sem voar para fora da tela.
+
+`check_auto_outro()` é chamada de dentro do event loop (duplicação, auto-fill),
+de **thread** (ingestão, aprovação) e no Play. As três importam: sem a da
+ingestão o mosaico enchia de fotos reais e a animação nunca vinha; sem a do Play
+um mosaico preenchido em `idle` ficava travado cheio para sempre, porque as
+outras só rodam quando um tile pousa e não havia mais onde pousar.
 
 ## 4.2 Cenários do evento
 
