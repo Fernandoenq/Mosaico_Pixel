@@ -133,13 +133,13 @@ export const animateTileFlight = ({
 }: FlyAnimationParams): gsap.core.Timeline => {
   const flightEase = resolveEase(ease, preset);
 
-  // Container wrapper para o Preview Central com moldura (Camada 2 - Foto Voadora)
+  // Container wrapper para o Preview Central (Camada 2 - Foto Voadora).
+  //
+  // O cartão é só a foto: a moldura ciano que ficava em volta dele saiu a
+  // pedido — desenhava uma silhueta azul sobre a arte do cliente.
   const wrapper = new PIXI.Container();
   wrapper.x = startX;
   wrapper.y = startY;
-
-  const pad = cardSize / 90;
-  const cardBorder = new PIXI.Graphics();
 
   // Sprite de preview central com anchor em 0.5 (centro)
   const previewSprite = new PIXI.Sprite(texture);
@@ -166,28 +166,12 @@ export const animateTileFlight = ({
     previewSprite.width = w;
     previewSprite.height = h;
     previewWidth = w;
-
-    // A moldura acompanha a foto — num cartão quadrado sobraria borda vazia
-    // dos lados e o conjunto pareceria desalinhado no centro do telão.
-    cardBorder.clear();
-    cardBorder.lineStyle(Math.max(1, cardSize / 100), 0x00ffff, 0.9);
-    cardBorder.drawRoundedRect(
-      -(w / 2 + pad),
-      -(h / 2 + pad),
-      w + pad * 2,
-      h + pad * 2,
-      cardSize * 0.053,
-    );
   };
   applyPreviewDims();
   if (!texture.valid) {
     texture.baseTexture.once('loaded', applyPreviewDims);
   }
 
-  // A moldura ciano só faz sentido no cartão central; no voo direto ela viraria
-  // um retângulo brilhante atravessando a tela.
-  cardBorder.visible = centralPreviewEnabled;
-  wrapper.addChild(cardBorder);
   // Em voo a foto vai na cor ORIGINAL: o cartão central existe para a pessoa se
   // ver, e com o tinte da célula de destino ela se via vermelha ou dourada. A
   // cor da marca entra só no pouso — é o mesmo que o vídeo de referência faz.
